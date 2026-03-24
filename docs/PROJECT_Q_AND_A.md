@@ -2,9 +2,9 @@
 
 ## 1. How does your solution use AI / advanced technology?
 
-LabSense2 leverages state-of-the-art **Generative AI (Google Gemini 2.0 Flash)** and **Vector Search** to transform raw medical data into actionable insights:
+LabSense2 leverages state-of-the-art **Generative AI (Google Gemini 2.0 Flash Lite)** and **Vector Search** to transform raw medical data into actionable insights:
 
-* **Multimodal AI Analysis**: Using Gemini's vision capabilities, the app extracts structured data directly from photos or PDFs of lab reports, bypassing manual entry.
+* **Multimodal AI Analysis**: Using Gemini capabilities, the app extracts structured data directly from photos or PDFs of lab reports, bypassing manual entry.
 * **Semantic Interpretation**: Instead of simple "High/Low" flags, the AI interprets results in context (e.g., "Slightly elevated ALT might be due to your recent medication change") and generates plain-language summaries.
 * **RAG (Retrieval-Augmented Generation)**: We use a **Supabase Vector Store** to index the user's historical health data. When a user asks "Why is my energy low?", the AI retrieves relevant past lab trends (e.g., "Your Vitamin D has been dropping for 6 months") to provide a hyper-personalized answer.
 * **Privacy-Preserving Architecture**: Biometric authentication and local encryption ensure sensitive Health Data (PHI) is protected, utilizing modern Flutter Secure Storage.
@@ -31,3 +31,4 @@ Our design philosophy prioritizes **clarity** and **calm** in a typically stress
 * **Earlier Intervention**: By visualizing long-term trends (e.g., a slow creep in cholesterol over 3 years), users can make lifestyle changes *before* a value becomes clinically critical.
 * **Reduced Anxiety**: Replacing "Dr. Google" with a grounded, context-aware AI reduces unnecessary panic calls to doctors.
 * **Data Portability**: Creating a patient-owned, centralized repository of health history ensures that critical data isn't lost when switching doctors or insurance providers.
+

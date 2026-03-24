@@ -245,7 +245,7 @@ void main() async {
                 'Supabase (PostgreSQL, Auth, RLS)',
                 darkText,
               ),
-              _buildStackItem('AI Engine', 'Google Gemini 2.0 Flash', darkText),
+              _buildStackItem('AI Engine', 'NVIDIA NIM 2.0 Flash', darkText),
               _buildStackItem(
                 'Security',
                 'Row Level Security & AES Encryption',
@@ -326,3 +326,4 @@ pw.Widget _buildStackItem(String label, String value, PdfColor color) {
     ),
   );
 }
+

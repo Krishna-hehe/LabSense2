@@ -50,6 +50,6 @@ void main() {
     final gradient = decoration.gradient as LinearGradient;
 
     // Check that we have a gradient and it's not transparent
-    expect(gradient.colors.first.opacity, greaterThan(0));
+    expect(gradient.colors.first.a, greaterThan(0));
   });
 }

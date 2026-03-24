@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../../core/providers/core_providers.dart';
+import '../../../core/services/log_service.dart';
 import '../../../widgets/glass_card.dart';
 import '../../../core/theme.dart';
 
@@ -10,12 +11,26 @@ final securityEventsProvider = FutureProvider<List<Map<String, dynamic>>>((
   ref,
 ) async {
   final client = ref.watch(supabaseClientProvider);
-  final response = await client
-      .from('access_logs')
-      .select('*')
-      .order('created_at', ascending: false)
-      .limit(10);
-  return List<Map<String, dynamic>>.from(response);
+  try {
+    final response = await client
+        .from('audit_logs')
+        .select('action, details, user_agent, ip_address, created_at')
+        .order('created_at', ascending: false)
+        .limit(10);
+    return List<Map<String, dynamic>>.from(response);
+  } catch (e, stackTrace) {
+    AppLogger.warning(
+      'Falling back to access_logs after audit_logs query failed: $e',
+      error: e,
+      stackTrace: stackTrace,
+    );
+    final fallback = await client
+        .from('access_logs')
+        .select('*')
+        .order('created_at', ascending: false)
+        .limit(10);
+    return List<Map<String, dynamic>>.from(fallback);
+  }
 });
 
 class RecentSecurityEvents extends ConsumerWidget {
@@ -37,7 +52,8 @@ class RecentSecurityEvents extends ConsumerWidget {
           itemCount: events.length,
           itemBuilder: (context, index) {
             final event = events[index];
-            final date = DateTime.parse(event['created_at']);
+            final createdAt = event['created_at']?.toString();
+            final date = DateTime.tryParse(createdAt ?? '') ?? DateTime.now();
 
             return Padding(
               padding: const EdgeInsets.only(bottom: 8.0),
@@ -54,7 +70,7 @@ class RecentSecurityEvents extends ConsumerWidget {
                     ),
                   ),
                   title: Text(
-                    event['action'] ?? 'Unknown Action',
+                    event['action']?.toString() ?? 'Unknown Action',
                     style: const TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 13,
@@ -67,7 +83,7 @@ class RecentSecurityEvents extends ConsumerWidget {
                       color: AppColors.secondary,
                     ),
                   ),
-                  trailing: event['metadata'] != null
+                  trailing: (event['details'] ?? event['metadata']) != null
                       ? const Icon(Icons.chevron_right, size: 16)
                       : null,
                 ),

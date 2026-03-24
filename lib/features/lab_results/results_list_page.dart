@@ -8,6 +8,8 @@ import '../../core/navigation.dart';
 import '../../widgets/glass_card.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
+import '../../core/services/upload_service.dart';
+import '../../widgets/ocr_review_dialog.dart';
 import '../../core/pdf_service.dart' deferred as pdf_service;
 
 class ResultsListPage extends ConsumerStatefulWidget {
@@ -48,6 +50,54 @@ class _ResultsListPageState extends ConsumerState<ResultsListPage> {
     _debounce = Timer(const Duration(milliseconds: 500), () {
       ref.read(labResultsProvider.notifier).search(query);
     });
+  }
+
+  Future<void> _handleUpload(BuildContext context) async {
+    try {
+      final uploadNotifier = ref.read(uploadControllerProvider.notifier);
+      final parsedData = await uploadNotifier.pickAndUpload(context);
+
+      if (parsedData == null || !context.mounted) return;
+
+      final confirmedData = await showDialog<Map<String, dynamic>>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => OcrReviewDialog(initialData: parsedData),
+      );
+
+      if (confirmedData != null && context.mounted) {
+        await uploadNotifier.saveResult(confirmedData);
+        final postSaveState = ref.read(uploadControllerProvider);
+        if (!context.mounted) return;
+        if (postSaveState.error != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(postSaveState.error!),
+              backgroundColor: AppColors.warning,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Lab report added successfully!'),
+              backgroundColor: AppColors.success,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Upload failed: $e'),
+            backgroundColor: AppColors.danger,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -147,12 +197,9 @@ class _ResultsListPageState extends ConsumerState<ResultsListPage> {
             style: TextStyle(color: AppColors.secondary),
           ),
           const SizedBox(height: 24),
-          ElevatedButton(
-            onPressed: () {
-              // Navigation to upload is usually in MainLayout,
-              // but we can maybe trigger it or just show a message.
-            },
-            child: const Text('Upload Now'),
+           ElevatedButton(
+            onPressed: () => _handleUpload(context),
+            child: const Text('Upload Lab Report'),
           ),
         ],
       ),
@@ -251,19 +298,37 @@ class _ResultsListPageState extends ConsumerState<ResultsListPage> {
                     child: const Text('Cancel'),
                   ),
                 ] else
-                  OutlinedButton.icon(
-                    icon: const Icon(Icons.compare_arrows, size: 16),
-                    label: const Text('Compare Results'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.primary,
-                      side: const BorderSide(color: AppColors.primary),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.upload_file_outlined, size: 16),
+                        label: const Text('Upload Lab Report'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppColors.primary,
+                          side: const BorderSide(color: AppColors.primary),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        onPressed: () => _handleUpload(context),
                       ),
-                    ),
-                    onPressed: () =>
-                        ref.read(isComparisonModeProvider.notifier).state =
-                            true,
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.compare_arrows, size: 16),
+                        label: const Text('Compare Results'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppColors.primary,
+                          side: const BorderSide(color: AppColors.primary),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        onPressed: () =>
+                            ref.read(isComparisonModeProvider.notifier).state =
+                                true,
+                      ),
+                    ],
                   ),
               ],
             ),

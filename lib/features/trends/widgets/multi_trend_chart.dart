@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/theme.dart';
 import '../../../core/models.dart';
 import '../../../core/services/trend_analysis_service.dart';
+import '../../../core/utils/unit_sanitizer.dart';
 import 'package:intl/intl.dart';
 
 class MultiTrendChart extends StatelessWidget {
@@ -159,9 +160,12 @@ class MultiTrendChart extends StatelessWidget {
                 ),
               );
               final date = DateFormat('MMM dd, yyyy').format(report.date);
+              final displayUnit = getDisplayUnit({'unit': test?.unit ?? ''});
 
               return LineTooltipItem(
-                '$testName\n$date\n${touchedSpot.y.toStringAsFixed(1)} ${test?.unit ?? ""}',
+                displayUnit.isEmpty
+                    ? '$testName\n$date\n${touchedSpot.y.toStringAsFixed(1)}'
+                    : '$testName\n$date\n${touchedSpot.y.toStringAsFixed(1)} $displayUnit',
                 TextStyle(
                   color: touchedSpot.bar.color, // Neon color text
                   fontWeight: FontWeight.bold,
@@ -385,9 +389,12 @@ class MultiTrendChart extends StatelessWidget {
               }
 
               final date = DateFormat('MMM dd, yyyy').format(report.date);
+              final displayUnit = getDisplayUnit({'unit': test?.unit ?? ''});
 
               return LineTooltipItem(
-                '$testName\n$date\n${val.toStringAsFixed(1)} ${test?.unit ?? ""}',
+                displayUnit.isEmpty
+                    ? '$testName\n$date\n${val.toStringAsFixed(1)}'
+                    : '$testName\n$date\n${val.toStringAsFixed(1)} $displayUnit',
                 TextStyle(color: color, fontWeight: FontWeight.bold),
               );
             }).toList();
@@ -468,9 +475,12 @@ class MultiTrendChart extends StatelessWidget {
                 (p) => p.date.millisecondsSinceEpoch == spot.x.toInt(),
                 orElse: () => normalizedData![key]!.first,
               );
+              final displayUnit = getDisplayUnit({'unit': point.unit});
 
               return LineTooltipItem(
-                '$key: ${point.originalValue.toStringAsFixed(1)} ${point.unit}',
+                displayUnit.isEmpty
+                    ? '$key: ${point.originalValue.toStringAsFixed(1)}'
+                    : '$key: ${point.originalValue.toStringAsFixed(1)} $displayUnit',
                 TextStyle(color: spot.bar.color, fontWeight: FontWeight.bold),
               );
             }).toList();

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'log_service.dart';
 
@@ -7,6 +8,7 @@ import 'log_service.dart';
 /// This is a critical security check to prevent unauthorized data access
 class RlsVerificationService {
   final SupabaseClient _client;
+  static const String _rogueUserId = '00000000-0000-0000-0000-000000000000';
   bool _isVerified = false;
   DateTime? _lastVerification;
 
@@ -31,18 +33,53 @@ class RlsVerificationService {
     try {
       AppLogger.info('🔐 Starting RLS verification...');
 
+      if (!kIsWeb) {
+        try {
+          final rpcCheck = await _client.rpc('security_self_test');
+          final rpcResult = _asMap(rpcCheck);
+          if (rpcResult == null) {
+            AppLogger.warning(
+              'RLS self-test RPC returned an unexpected payload. Falling back '
+              'to direct table probes.',
+            );
+          } else if (rpcResult['ok'] != true) {
+            AppLogger.error(
+              '🚨 RLS self-test failed: '
+              'lab=${rpcResult['lab_results_count']} '
+              'profiles=${rpcResult['profiles_count']} '
+              'prescriptions=${rpcResult['prescriptions_count']} '
+              'medications=${rpcResult['medications_count']} '
+              'reminders=${rpcResult['reminders_count']} '
+              'rls=[lab:${rpcResult['lab_results_rls']} '
+              'profiles:${rpcResult['profiles_rls']} '
+              'prescriptions:${rpcResult['prescriptions_rls']} '
+              'medications:${rpcResult['medications_rls']} '
+              'reminders:${rpcResult['reminders_rls']}]',
+            );
+            _isVerified = false;
+            return false;
+          }
+        } on PostgrestException catch (e) {
+          AppLogger.warning(
+            'RLS self-test RPC unavailable or outdated '
+            '(${e.code ?? 'unknown'}). Falling back to direct probes. '
+            'Ensure migration 005_security_self_test.sql is applied remotely.',
+          );
+        }
+      }
+
       // Run multiple tests to verify RLS is working correctly
       final results = await Future.wait([
         _testLabResultsRls(),
         _testProfilesRls(),
         _testPrescriptionsRls(),
         _testMedicationsRls(),
-        _testRemindersRls(),
       ]);
 
       final allPassed = results.every((passed) => passed == true);
+      final verificationPassed = allPassed;
 
-      if (allPassed) {
+      if (verificationPassed) {
         _isVerified = true;
         _lastVerification = DateTime.now();
         AppLogger.info(
@@ -55,9 +92,13 @@ class RlsVerificationService {
         );
       }
 
-      return allPassed;
-    } catch (e) {
-      AppLogger.error('❌ RLS verification error: $e');
+      return verificationPassed;
+    } catch (e, stackTrace) {
+      AppLogger.error(
+        '❌ RLS verification error: $e',
+        error: e,
+        stackTrace: stackTrace,
+      );
       _isVerified = false;
       return false;
     }
@@ -65,113 +106,88 @@ class RlsVerificationService {
 
   /// Test lab_results RLS policy
   Future<bool> _testLabResultsRls() async {
-    try {
-      final currentUser = _client.auth.currentUser;
-      if (currentUser == null) return false;
-
-      // Try to access a non-existent user's data
-      final result = await _client
-          .from('lab_results')
-          .select('id')
-          .eq('user_id', '00000000-0000-0000-0000-000000000000')
-          .limit(1);
-
-      if (result.isNotEmpty) {
-        AppLogger.error('🚨 lab_results RLS FAILED!');
-        return false;
-      }
-      return true;
-    } catch (e) {
-      return true; // Expected failure is success for RLS
-    }
+    final currentUser = _client.auth.currentUser;
+    if (currentUser == null) return false;
+    return _probeTable('lab_results');
   }
 
   /// Test profiles RLS policy
   Future<bool> _testProfilesRls() async {
-    try {
-      final currentUser = _client.auth.currentUser;
-      if (currentUser == null) return false;
-
-      final result = await _client
-          .from('profiles')
-          .select('id')
-          .eq('user_id', '00000000-0000-0000-0000-000000000000')
-          .limit(1);
-
-      if (result.isNotEmpty) {
-        AppLogger.error('🚨 profiles RLS FAILED!');
-        return false;
-      }
-      return true;
-    } catch (e) {
-      return true;
-    }
+    final currentUser = _client.auth.currentUser;
+    if (currentUser == null) return false;
+    return _probeTable('profiles');
   }
 
   /// Test prescriptions RLS policy
   Future<bool> _testPrescriptionsRls() async {
-    try {
-      final currentUser = _client.auth.currentUser;
-      if (currentUser == null) return false;
-
-      final result = await _client
-          .from('prescriptions')
-          .select('id')
-          .eq('user_id', '00000000-0000-0000-0000-000000000000')
-          .limit(1);
-
-      if (result.isNotEmpty) {
-        AppLogger.error('🚨 prescriptions RLS FAILED!');
-        return false;
-      }
-      return true;
-    } catch (e) {
-      return true;
-    }
+    final currentUser = _client.auth.currentUser;
+    if (currentUser == null) return false;
+    return _probeTable('prescriptions');
   }
 
   /// Test medications RLS policy
   Future<bool> _testMedicationsRls() async {
-    try {
-      final currentUser = _client.auth.currentUser;
-      if (currentUser == null) return false;
+    final currentUser = _client.auth.currentUser;
+    if (currentUser == null) return false;
+    return _probeTable('medications');
+  }
 
-      final result = await _client
-          .from('medications')
+  Future<bool> _probeTable(String table, {String ownerColumn = 'user_id'}) async {
+    try {
+      final List<Map<String, dynamic>> result = await _client
+          .from(table)
           .select('id')
-          .eq('user_id', '00000000-0000-0000-0000-000000000000')
+          .eq(ownerColumn, _rogueUserId)
           .limit(1);
 
       if (result.isNotEmpty) {
-        AppLogger.error('🚨 medications RLS FAILED!');
+        AppLogger.error('🚨 $table RLS FAILED (unexpected rows returned).');
         return false;
       }
       return true;
-    } catch (e) {
-      return true;
+    } on PostgrestException catch (e) {
+      final message = e.message.toLowerCase();
+      if (table == 'profiles' &&
+          ownerColumn == 'user_id' &&
+          (e.code == '42703' ||
+              (message.contains('column') && message.contains('user_id')))) {
+        return _probeTable('profiles', ownerColumn: 'id');
+      }
+      final denied = _isExpectedRlsBlock(e);
+      if (!denied) {
+        AppLogger.error(
+          '🚨 $table RLS probe failed with unexpected DB error: '
+          '${e.code} ${e.message}',
+        );
+      }
+      return denied;
+    } catch (e, stackTrace) {
+      AppLogger.error(
+        '🚨 $table RLS probe failed unexpectedly: $e',
+        error: e,
+        stackTrace: stackTrace,
+      );
+      return false;
     }
   }
 
-  /// Test reminder_schedules RLS policy
-  Future<bool> _testRemindersRls() async {
-    try {
-      final currentUser = _client.auth.currentUser;
-      if (currentUser == null) return false;
+  bool _isExpectedRlsBlock(PostgrestException e) {
+    final code = (e.code ?? '').toLowerCase();
+    final message = e.message.toLowerCase();
+    return code == '42501' ||
+        message.contains('permission denied') ||
+        message.contains('row-level security') ||
+        message.contains('violates row-level security policy');
+  }
 
-      await _client.from('reminder_schedules').select('id').limit(1);
-
-      // If we get any results, we need to check if they belong to us.
-      // But a more reliable test for RLS is: try to query by a medication_id that isn't ours.
-      // However, we don't necessarily have a "known bad" medication_id.
-      // A simple check is that if the table has data, we only see ours.
-      // For verification purposes, as long as it doesn't throw a permission error on a legitimate query
-      // and blocks unauthorized ones, it's good.
-      // For this automated check, we'll just check it's accessible.
-
-      return true;
-    } catch (e) {
-      return true;
+  Map<String, dynamic>? _asMap(dynamic value) {
+    if (value is Map<String, dynamic>) {
+      return value;
     }
+    if (value is Map) {
+      return Map<String, dynamic>.from(value);
+    }
+    return null;
   }
 
   /// Force re-verification

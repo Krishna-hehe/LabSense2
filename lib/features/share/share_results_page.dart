@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'dart:ui';
+import '../../core/app_config.dart';
+import '../../core/providers.dart';
 import '../../core/theme.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/glass_shimmer.dart';
@@ -580,35 +582,61 @@ class _ShareResultsPageState extends ConsumerState<ShareResultsPage> {
   }
 
   Future<void> _generateSecureLinkRedesigned() async {
-    setState(() => _isGenerating = true);
-
-    // Simulate API delay
-    await Future.delayed(const Duration(seconds: 1));
-
-    // For development, use the current window location if web, otherwise placeholder
-    String baseUrl = 'http://localhost:8080';
     try {
-      if (kIsWeb) {
-        // This requires importing dart:html or equivalent if we want dynamic origin,
-        // but for safety in this pure Dart file we can just use a relative path or instruction.
-        // Actually, let's use a clear "Mock" domain but explain it.
-        // Or better, since the user wants to see it 'work', let's point to a route that exists.
-        // However, we don't have a /s/ route set up.
-        // Let's stick to the requested "labsense.app" but make it clear it is a MOCK link.
-        baseUrl = 'https://labsense.app';
+      setState(() => _isGenerating = true);
+      final selectedProfile = ref.read(selectedProfileProvider).value;
+      if (selectedProfile == null) {
+        throw Exception('No profile selected for sharing.');
       }
-    } catch (_) {}
 
-    final String permissionParam = _shareDownloadReports ? 'full' : 'view';
-    final String uniqueId = DateTime.now().millisecondsSinceEpoch
-        .toString()
-        .substring(8);
-    final String link =
-        '$baseUrl/share/$uniqueId?e=$_selectedExpiration&p=$permissionParam';
+      final duration = _durationFromSelection(_selectedExpiration);
+      final token = await ref
+          .read(supabaseServiceProvider)
+          .createShareLink(profileId: selectedProfile.id, duration: duration);
+      final link = _buildDoctorViewLink(token);
 
-    if (!mounted) return;
-    setState(() => _isGenerating = false);
+      if (!mounted) return;
+      setState(() => _isGenerating = false);
+      _showGeneratedLinkDialog(link);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isGenerating = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to generate secure link: $e'),
+          backgroundColor: AppColors.danger,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
 
+  Duration _durationFromSelection(String selected) {
+    switch (selected) {
+      case 'One Time':
+        return const Duration(minutes: 30);
+      case '7 days':
+        return const Duration(days: 7);
+      case '30 days':
+        return const Duration(days: 30);
+      case '90 days':
+        return const Duration(days: 90);
+      case 'Never':
+        return const Duration(days: 3650);
+      default:
+        return const Duration(days: 7);
+    }
+  }
+
+  String _buildDoctorViewLink(String token) {
+    final configuredBase = AppConfig.shareBaseUrl.trim();
+    final base = configuredBase.isNotEmpty
+        ? configuredBase
+        : 'https://labsense.app';
+    return '$base/doctor_view?token=$token';
+  }
+
+  void _showGeneratedLinkDialog(String link) {
     showDialog(
       context: context,
       builder: (context) => Dialog(
@@ -711,9 +739,13 @@ class _ShareResultsPageState extends ConsumerState<ShareResultsPage> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
+                      onPressed: () async {
+                        final navigator = Navigator.of(context);
+                        final messenger = ScaffoldMessenger.of(context);
+                        await Clipboard.setData(ClipboardData(text: link));
+                        if (!mounted) return;
+                        navigator.pop();
+                        messenger.showSnackBar(
                           const SnackBar(
                             content: Text('Link copied to clipboard!'),
                             backgroundColor: AppColors.primaryBrand,

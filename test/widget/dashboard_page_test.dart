@@ -18,8 +18,9 @@ void main() {
       ),
     );
 
-    // Initial state is loading for async providers
-    expect(find.byType(CircularProgressIndicator), findsWidgets);
+    // Initial state should render key dashboard shell without crashing.
+    expect(find.byType(DashboardPage), findsOneWidget);
+    expect(find.textContaining('Welcome back'), findsOneWidget);
   });
 
   testWidgets('DashboardPage renders summary stats when data loads', skip: true, (
@@ -51,9 +52,6 @@ void main() {
           ),
           labResultsProvider.overrideWith(
             () => LabResultsNotifierMock(mockResults),
-          ),
-          dashboardAiInsightProvider.overrideWith(
-            (ref) => Future.value('AI Insight text'),
           ),
         ],
         child: const MaterialApp(

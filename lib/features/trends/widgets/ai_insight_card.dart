@@ -4,6 +4,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import '../../../core/theme.dart';
 import '../../../core/providers.dart';
 import '../../../core/models.dart';
+import '../../../core/utils/unit_sanitizer.dart';
 import 'package:intl/intl.dart';
 import '../../../widgets/glass_card.dart';
 
@@ -56,7 +57,7 @@ class _AiInsightCardState extends ConsumerState<AiInsightCard> {
                 ),
               );
               return test != null && test.result.isNotEmpty
-                  ? '${DateFormat('yyyy-MM-dd').format(r.date)}: ${test.result} ${test.unit}'
+                  ? '${DateFormat('yyyy-MM-dd').format(r.date)}: ${formatDisplayValueWithUnit({'value': test.result, 'unit': test.unit})}'
                   : null;
             })
             .where((e) => e != null)

@@ -1,14 +1,19 @@
 import 'dart:math';
 import 'package:flutter/foundation.dart';
-import 'package:google_generative_ai/google_generative_ai.dart';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
+import 'package:http/http.dart' as http;
 import 'vector_service.dart';
 import 'services/rate_limiter_service.dart';
 import 'services/log_service.dart';
+import 'services/chat_insight_service.dart';
+import 'services/llamaparse_service.dart';
 import 'cache_service.dart';
 import 'utils/medical_terms.dart';
+import 'utils/unit_sanitizer.dart';
 import 'models.dart';
+
+enum LabParseStage { parsing, extracting }
 
 class LabTestAnalysis {
   final String description;
@@ -48,55 +53,84 @@ class LabTestAnalysis {
   }
 }
 
+class AiChatResponse {
+  final String text;
+  final List<Map<String, dynamic>> retrievedChunks;
+  final List<ChatCitation> citations;
+  final ChatConfidence confidence;
+  final List<CriticalAlert> criticalAlerts;
+  final List<MedicationLabInteraction> medicationInteractions;
+  final List<String> followUpPlan;
+  final String languageCode;
+
+  const AiChatResponse({
+    required this.text,
+    required this.retrievedChunks,
+    required this.citations,
+    required this.confidence,
+    required this.criticalAlerts,
+    required this.medicationInteractions,
+    required this.followUpPlan,
+    required this.languageCode,
+  });
+}
+
 class AiService {
-  final String apiKey;
-  final String? chatApiKey; // Optional separate key for chat
+  final String aiApiKey;
+  final String aiBaseUrl;
+  final String aiChatModel;
+  final String aiProxyUrl;
+  final String aiProxyAnonKey;
+  final Future<String?> Function()? proxyAccessTokenProvider;
+  final Future<String?> Function()? proxyAccessTokenRefreshProvider;
   final VectorService vectorService;
   final CacheService cacheService;
-  late final GenerativeModel _textModel;
-  late final GenerativeModel _visionModel;
-  late final GenerativeModel _chatModel;
+  final LlamaParseService _llamaParseService;
+  final ChatInsightService _chatInsightService;
+  final http.Client _httpClient;
 
   final RateLimiterService _rateLimiter;
 
   // Test hook
-  final Future<GenerateContentResponse> Function(Iterable<Content> content)?
-  mockTextGenerator;
+  final Future<String> Function(String prompt)? mockTextGenerator;
 
   AiService({
-    required this.apiKey,
-    this.chatApiKey,
+    this.aiApiKey = '',
+    this.aiBaseUrl = 'https://generativelanguage.googleapis.com/v1beta',
+    this.aiChatModel = 'gemini-flash-lite-latest',
+    this.aiProxyUrl = '',
+    this.aiProxyAnonKey = '',
+    this.proxyAccessTokenProvider,
+    this.proxyAccessTokenRefreshProvider,
+    String? llamaParseApiKey,
+    String llamaParseBaseUrl = 'https://api.cloud.llamaindex.ai',
     required this.vectorService,
     required this.cacheService,
 
     required RateLimiterService rateLimiter,
-    GenerativeModel? textModel,
-    GenerativeModel? visionModel,
-    GenerativeModel? chatModel,
+    LlamaParseService? llamaParseService,
+    http.Client? httpClient,
+    ChatInsightService? chatInsightService,
     this.mockTextGenerator,
-  }) : _rateLimiter = rateLimiter {
-    if (apiKey.isEmpty) {
-      AppLogger.debug('❌ AiService: API Key is empty!');
+  }) : _rateLimiter = rateLimiter,
+       _chatInsightService = chatInsightService ?? ChatInsightService(),
+       _httpClient = httpClient ?? http.Client(),
+       _llamaParseService =
+           llamaParseService ??
+           LlamaParseService(
+             apiKey: llamaParseApiKey ?? '',
+             baseUrl: llamaParseBaseUrl,
+            ) {
+    if (aiApiKey.trim().isEmpty) {
+      AppLogger.debug('❌ AiService: GEMINI_API_KEY is empty!');
     } else {
       AppLogger.debug(
-        '🚀 AiService: Initializing with key starting with: ${apiKey.substring(0, min(5, apiKey.length))}...',
+        '🚀 AiService: Initializing Gemini with key starting: ${aiApiKey.substring(0, min(5, aiApiKey.length))}...',
       );
     }
-    _textModel =
-        textModel ?? GenerativeModel(model: 'gemini-2.5-flash', apiKey: apiKey);
-    _visionModel =
-        visionModel ??
-        GenerativeModel(model: 'gemini-2.5-flash', apiKey: apiKey);
-    // Initialize Chat Model - prefer chatApiKey, fallback to main apiKey
-    final effectiveChatKey = (chatApiKey != null && chatApiKey!.isNotEmpty)
-        ? chatApiKey!
-        : apiKey;
     AppLogger.debug(
-      '💬 AiService: Chat initialized with key starting with: ${effectiveChatKey.substring(0, min(5, effectiveChatKey.length))}...',
+      '💬 AiService: Gemini chat ${aiBaseUrl.trim().isNotEmpty && aiApiKey.trim().isNotEmpty ? 'configured' : 'not configured'}',
     );
-    _chatModel =
-        chatModel ??
-        GenerativeModel(model: 'gemini-2.5-flash', apiKey: effectiveChatKey);
   }
 
   String _sanitizeInput(String input) {
@@ -131,16 +165,58 @@ class AiService {
     return history.map((report) {
       List<Map<String, dynamic>> meaningfulTests = [];
       final results = report['test_results'] ?? report['testResults'];
-      if (results != null) {
+      if (results is List) {
         for (var test in results) {
+          if (test is! Map) continue;
+          final sanitizedUnit = UnitSanitizer.clean(test['unit']?.toString());
           // We only keep essential fields
           meaningfulTests.add({
             'n': test['name'] ?? test['test_name'],
             'v': test['result'] ?? test['value'] ?? test['result_value'],
-            'u': test['unit'],
+            'u': sanitizedUnit,
             's': test['status'], // 'High', 'Low', 'Normal'
           });
         }
+      } else if (results != null) {
+        if (kDebugMode) {
+          AppLogger.warning(
+            '_minifyHistory received non-list test results payload. '
+            'Expected List for test_results/testResults. '
+            'Type: ${results.runtimeType}, keys: ${report.keys.toList()}',
+          );
+        }
+      } else {
+        // Support callers that provide a flat list of test rows instead of
+        // report objects with nested test_results.
+        final testName = (report['name'] ?? report['test_name'])?.toString();
+        final testValue =
+            (report['result'] ?? report['value'] ?? report['result_value'])
+                ?.toString();
+        final sanitizedUnit = UnitSanitizer.clean(report['unit']?.toString());
+        if ((testName != null && testName.trim().isNotEmpty) ||
+            (testValue != null && testValue.trim().isNotEmpty)) {
+          meaningfulTests.add({
+            'n': testName,
+            'v': testValue,
+            'u': sanitizedUnit,
+            's': report['status'],
+          });
+        }
+        if (kDebugMode &&
+            (testName == null || testName.trim().isEmpty) &&
+            (testValue == null || testValue.trim().isEmpty)) {
+          AppLogger.warning(
+            '_minifyHistory received report row with no recognizable test keys. '
+            'Expected test_results/testResults or flat name+value keys. '
+            'Available keys: ${report.keys.toList()}',
+          );
+        }
+      }
+      if (kDebugMode && results == null && meaningfulTests.isEmpty) {
+        AppLogger.warning(
+          '_minifyHistory skipped report with unrecognized shape. '
+          'Available keys: ${report.keys.toList()}',
+        );
       }
       return {'d': report['date'], 't': meaningfulTests};
     }).toList();
@@ -216,9 +292,13 @@ class AiService {
     ''';
 
     try {
-      final content = [Content.text(prompt)];
-      final response = await _textModel.generateContent(content);
-      String rawText = response.text?.trim() ?? '{}';
+      final rawText = await _generateAiText(
+        prompt: prompt,
+        systemPrompt:
+            'You are a medical lab analysis assistant. Return strict JSON only.',
+        temperature: 0.1,
+        maxTokens: 700,
+      );
 
       AppLogger.debug(
         '🤖 AI Raw Response ($testName): $rawText',
@@ -306,9 +386,13 @@ class AiService {
     ''';
 
     try {
-      final content = [Content.text(prompt)];
-      final response = await _textModel.generateContent(content);
-      String rawText = response.text?.trim() ?? '{}';
+      final rawText = await _generateAiText(
+        prompt: prompt,
+        systemPrompt:
+            'You are a trend analysis assistant. Return strict JSON only.',
+        temperature: 0.1,
+        maxTokens: 500,
+      );
       String jsonStr = _extractJson(rawText);
       final data = jsonDecode(jsonStr);
 
@@ -385,9 +469,13 @@ class AiService {
     ''';
 
     try {
-      final content = [Content.text(prompt)];
-      final response = await _textModel.generateContent(content);
-      final text = response.text?.trim() ?? 'Correlation analysis incomplete.';
+      final text = await _generateAiText(
+        prompt: prompt,
+        systemPrompt:
+            'You are a clinical correlation assistant. Keep answers concise and evidence-grounded.',
+        temperature: 0.2,
+        maxTokens: 500,
+      );
       cacheService.cacheAiResponse(cacheKey, text);
       return text;
     } catch (e) {
@@ -452,9 +540,13 @@ class AiService {
     ''';
 
     try {
-      final content = [Content.text(prompt)];
-      final response = await _textModel.generateContent(content);
-      String rawText = response.text?.trim() ?? '[]';
+      final rawText = await _generateAiText(
+        prompt: prompt,
+        systemPrompt:
+            'You are a nutrition and lifestyle assistant. Return strict JSON array only.',
+        temperature: 0.2,
+        maxTokens: 700,
+      );
       final jsonStr = _extractJson(rawText);
       final List<dynamic> data = jsonDecode(jsonStr);
 
@@ -531,9 +623,13 @@ class AiService {
     ''';
 
     try {
-      final content = [Content.text(prompt)];
-      final response = await _textModel.generateContent(content);
-      String rawText = response.text?.trim() ?? '[]';
+      final rawText = await _generateAiText(
+        prompt: prompt,
+        systemPrompt:
+            'You are a wellness assistant. Return strict JSON array only.',
+        temperature: 0.2,
+        maxTokens: 500,
+      );
       final jsonStr = _extractJson(rawText);
       final List<dynamic> data = jsonDecode(jsonStr);
 
@@ -590,13 +686,13 @@ class AiService {
     ''';
 
     try {
-      final content = [Content.text(prompt)];
-
-      final response = mockTextGenerator != null
-          ? await mockTextGenerator!(content)
-          : await _textModel.generateContent(content);
-
-      String rawText = response.text?.trim() ?? '[]';
+      final rawText = await _generateAiText(
+        prompt: prompt,
+        systemPrompt:
+            'You are a predictive health assistant. Return strict JSON array only.',
+        temperature: 0.2,
+        maxTokens: 700,
+      );
       final jsonStr = _extractJson(rawText);
       final List<dynamic> data = jsonDecode(jsonStr);
 
@@ -624,8 +720,23 @@ class AiService {
     if (tests.isEmpty) {
       return 'No lab results available.';
     }
-
     final minifiedTests = _minifyHistory(tests);
+    final hasAnyValidRow = minifiedTests.any((report) {
+      final rows = report['t'];
+      if (rows is! List) return false;
+      for (final row in rows) {
+        if (row is! Map) continue;
+        final value = (row['v'] ?? '').toString().trim();
+        final name = (row['n'] ?? '').toString().trim();
+        if (name.isNotEmpty && value.isNotEmpty && value.toLowerCase() != 'null') {
+          return true;
+        }
+      }
+      return false;
+    });
+    if (!hasAnyValidRow) {
+      return 'No lab data was provided. Please enter your results.';
+    }
     final cacheKey = _generateCacheKey('batch_summary', minifiedTests);
 
     final cached = cacheService.getAiCache(cacheKey);
@@ -649,21 +760,40 @@ class AiService {
     ''';
 
     try {
-      final content = [Content.text(prompt)];
-      final response = await _textModel.generateContent(content);
-      final text = response.text?.trim() ?? 'Analysis incomplete.';
+      final text = await _generateAiText(
+        prompt: prompt,
+        systemPrompt:
+            'You are a medical summary assistant. Keep output concise and patient-friendly.',
+        temperature: 0.2,
+        maxTokens: 600,
+      );
 
       cacheService.cacheAiResponse(cacheKey, text);
       return text;
     } catch (e) {
       AppLogger.error('getBatchSummary error: $e');
-      return 'Unable to generate summary at this time. Error: $e';
+      return _userFacingAiServiceError();
     }
   }
 
   Future<String> chat(
     String query, {
     Map<String, dynamic>? healthContext,
+    String languageCode = 'en',
+  }) async {
+    final response = await chatDetailed(
+      query,
+      healthContext: healthContext,
+      languageCode: languageCode,
+    );
+    return response.text;
+  }
+
+  Future<AiChatResponse> chatDetailed(
+    String query, {
+    Map<String, dynamic>? healthContext,
+    String languageCode = 'en',
+    List<Map<String, String>> conversationHistory = const [],
   }) async {
     final waitTime = _rateLimiter.checkLimit(
       'ai_chat',
@@ -671,25 +801,128 @@ class AiService {
       window: const Duration(minutes: 30),
     );
     if (waitTime != null) {
-      return 'Rate limit exceeded. Please wait ${waitTime.inMinutes + 1} minutes.';
+      return AiChatResponse(
+        text:
+            'Rate limit exceeded. Please wait ${waitTime.inMinutes + 1} minutes.',
+        retrievedChunks: const [],
+        citations: const [],
+        confidence: const ChatConfidence(
+          score: 0.2,
+          level: 'Low',
+          rationale:
+              'Rate limit was reached, so a grounded response could not be generated.',
+          factors: ['Rate limit exceeded for ai_chat.'],
+        ),
+        criticalAlerts: const [],
+        medicationInteractions: const [],
+        followUpPlan: const [],
+        languageCode: languageCode,
+      );
     }
 
     query = _sanitizeInput(query);
+    final abnormalLabs =
+        (healthContext?['abnormal_labs'] as List?)
+            ?.whereType<Map>()
+            .map((entry) => Map<String, dynamic>.from(entry))
+            .toList(growable: false) ??
+        const <Map<String, dynamic>>[];
+    final activePrescriptions =
+        (healthContext?['active_prescriptions'] as List?)
+            ?.whereType<Map>()
+            .map((entry) => Map<String, dynamic>.from(entry))
+            .toList(growable: false) ??
+        const <Map<String, dynamic>>[];
 
     try {
       final relevantChunks = await vectorService.searchSimilarChunks(query);
 
-      final contextChunks = relevantChunks.map((chunk) {
-        return 'Content: ${chunk['content']}\nDate: ${chunk['metadata']['date']}';
+      final contextChunks = relevantChunks.asMap().entries.map((entry) {
+        final i = entry.key;
+        final chunk = entry.value;
+        final metadata = chunk['metadata'] is Map
+            ? Map<String, dynamic>.from(chunk['metadata'] as Map)
+            : <String, dynamic>{};
+        final sourceTag = chunk['source_tag']?.toString() ?? 'S${i + 1}';
+        final confidence =
+            ((chunk['retrieval_confidence'] as num?)?.toDouble() ?? 0.0) * 100;
+        final confidencePct = confidence.toStringAsFixed(0);
+        return '[Source: $sourceTag | Confidence: $confidencePct%]\n'
+            'Content: ${chunk['content']}\n'
+            'Date: ${metadata['date'] ?? 'Unknown'}';
       }).toList();
 
-      return await getChatResponseWithContext(
+      final text = await getChatResponseWithContext(
         query: query,
         contextChunks: contextChunks,
         healthContext: healthContext,
+        languageCode: languageCode,
+        conversationHistory: conversationHistory,
+      );
+      final sourceTags = relevantChunks
+          .map((chunk) => chunk['source_tag']?.toString() ?? '')
+          .where((tag) => tag.isNotEmpty)
+          .toSet();
+      final citationHints = <String, String>{};
+      for (final chunk in relevantChunks) {
+        final sourceTag = chunk['source_tag']?.toString() ?? '';
+        if (sourceTag.isEmpty) continue;
+        final content = chunk['content']?.toString() ?? '';
+        final hintedTestName = _chatInsightService.inferTestNameFromChunk(
+          content,
+        );
+        if (hintedTestName != null && hintedTestName.isNotEmpty) {
+          citationHints[sourceTag] = hintedTestName;
+        }
+      }
+      final citations = _chatInsightService.extractCitations(
+        text,
+        retrievedSourceTags: sourceTags,
+        sourceTagToHintedTestName: citationHints,
+      );
+      final criticalAlerts = _chatInsightService.detectCriticalAlerts(
+        abnormalLabs,
+      );
+      final medicationInteractions = _chatInsightService
+          .detectMedicationLabInteractions(activePrescriptions, abnormalLabs);
+      final confidence = _chatInsightService.buildConfidence(
+        answerText: text,
+        citations: citations,
+        retrievedChunks: relevantChunks,
+        criticalAlerts: criticalAlerts,
+      );
+      final followUpPlan = _buildFollowUpPlan(
+        query: query,
+        criticalAlerts: criticalAlerts,
+        medicationInteractions: medicationInteractions,
+      );
+      return AiChatResponse(
+        text: text,
+        retrievedChunks: relevantChunks,
+        citations: citations,
+        confidence: confidence,
+        criticalAlerts: criticalAlerts,
+        medicationInteractions: medicationInteractions,
+        followUpPlan: followUpPlan,
+        languageCode: languageCode,
       );
     } catch (e) {
-      return 'I encountered an error analyzing your health data: $e';
+      return AiChatResponse(
+        text: _userFacingAiServiceError(),
+        retrievedChunks: const [],
+        citations: const [],
+        confidence: const ChatConfidence(
+          score: 0.2,
+          level: 'Low',
+          rationale:
+              'An upstream error occurred before evidence-grounded reasoning completed.',
+          factors: ['Upstream query failure.'],
+        ),
+        criticalAlerts: const [],
+        medicationInteractions: const [],
+        followUpPlan: const [],
+        languageCode: languageCode,
+      );
     }
   }
 
@@ -697,6 +930,8 @@ class AiService {
     required String query,
     required List<String> contextChunks,
     Map<String, dynamic>? healthContext,
+    String languageCode = 'en',
+    List<Map<String, String>> conversationHistory = const [],
   }) async {
     // Chat is dynamic, harder to cache effectively without strict keys, skipping for now
 
@@ -711,7 +946,7 @@ class AiService {
           ?.map(
             (t) => {
               'Test': t['test_name'],
-              'Result': '${t['value']} ${t['unit']}',
+              'Result': formatDisplayValueWithUnit(t, valueKey: 'value'),
               'Status': t['status'],
               'Ref': t['reference_range'],
             },
@@ -735,134 +970,348 @@ class AiService {
       ''';
     }
 
+    final languageInstruction = _languageInstruction(languageCode);
+    final historySummary = _chatInsightService.buildConversationSummary(
+      conversationHistory,
+      maxTurns: 6,
+    );
+
     final prompt =
         '''
-      SYSTEM DIRECTIVE: ACT AS AN EXPERIENCED MEDICAL PROFESSIONAL.
-      
-      ROLE: Explain the lab report below in simple language for a non-medical person.
+You are LabSense Clinical Assistant.
+Goal: Answer the user using only relevant, necessary medical information.
 
-      $healthContextStr
-      
-      RETRIEVED HISTORY:
-      $contextText
-      
-      USER QUERY: "$query"
+Grounding rules:
+- Use retrieved history when available and cite facts as [Source: ...].
+- If data is missing or uncertain, clearly say so.
+- Do not invent diagnoses or medications.
+- Keep tone calm, practical, and non-alarming.
+- Language rule: $languageInstruction
 
-      RESPONSE GUIDELINES:
-      - **Overall Health Summary**: Quick understanding (Normal/Concerns).
-      - **Abnormal Results**: List values outside range & explain meaning.
-      - **Possible Causes**: Lifestyle, diet, infections, etc.
-      - **Health Risks**: What could develop if ignored?
-      - **What I Should Do Next**: Diet, lifestyle, hydration, sleep, exercise.
-      - **Urgency Check**: Serious vs Mild?
-      - **Good Signs**: What is working well?
-      
-      FORMATTING RULES:
-      ✔ Avoid heavy medical jargon.
-      ✔ Use bullet points.
-      ✔ Explain numbers with normal ranges.
-      ✔ NO PANIC: Differentiate mild vs serious.
-      ✔ Borderline: Explain prevention.
-      
-      AT THE END: Give a simple **5-line action plan** for improving health.
-      
-      DISCLAIMER: Always end with: "_(Medical Disclaimer: Consult your doctor)_".
-    ''';
+Output format (concise):
+1) Direct answer (2-4 sentences)
+2) Key findings (up to 4 bullets, include values/ranges when available)
+3) What to do next (up to 4 actionable bullets)
+4) Red flags (only if urgent signs are present; otherwise say "No urgent red flags from available data.")
+5) End exactly with: _(Medical Disclaimer: Consult your doctor)_
 
+$healthContextStr
+
+RECENT CONVERSATION CONTEXT:
+$historySummary
+
+RETRIEVED HISTORY:
+$contextText
+
+USER QUESTION:
+$query
+''';
     try {
-      final content = [Content.text(prompt)];
-      final response = await _chatModel.generateContent(content);
-      return response.text?.trim() ?? 'I was unable to generate a response.';
+      return await _generateAiText(
+        prompt: prompt,
+        systemPrompt:
+            'You are a concise, evidence-grounded medical education assistant. Use only necessary information and avoid speculation.',
+        temperature: 0.2,
+        maxTokens: 600,
+      );
     } catch (e) {
-      return 'Error generating response: $e';
+      return _userFacingAiServiceError();
     }
   }
 
-  Future<Map<String, dynamic>?> parseLabReport(
-    Uint8List imageBytes,
-    String mimeType,
-  ) async {
-    // Vision cannot be cached easily by hash of bytes (too big), and usually one-off operation
-    final prompt = '''
-      You are an expert Medical Data Extractor. Your task is to extract structured lab results from the provided image.
-      
-      CRITICAL INSTRUCTIONS:
-      1.  **Extract Specific Fields:** For each test, extract `test_name`, `result_value`, `unit`, `reference_range`, and `status` (High/Low/Normal).
-      2.  **Normalize Test Names:** If a test name is common (e.g., "A1C", "HbA1c"), map it to its standard LOINC-compatible name (e.g., "Hemoglobin A1c").
-      3.  **Handle Tables:** The image likely contains a table. process each row carefully.
-      4.  **Infer Status:** If the status is not explicitly stated, infer it by comparing the `result_value` to the `reference_range`.
-      5.  **Identify Meta-Data:** Extract `lab_name` and `date` (YYYY-MM-DD format).
-      
-      OUTPUT FORMAT (Strict JSON):
-      {
-        "lab_provider": "Quest, Labcorp, or Other",
-        "lab_name": "Full Lab Name found in image",
-        "date": "YYYY-MM-DD",
-        "test_results": [
-          {
-            "test_name": "Standardized Name",
-            "original_name": "Raw Name on Report",
-            "loinc_code": "LOINC Code (e.g., 4548-4)",
-            "result_value": "Numeric or String Value",
-            "unit": "Unit (e.g., mg/dL, %)",
-            "reference_range": "Range String",
-            "status": "High, Low, or Normal"
-          }
-        ]
+  Future<String> _generateAiText({
+    required String prompt,
+    required String systemPrompt,
+    double temperature = 0.2,
+    int maxTokens = 700,
+  }) async {
+    if (mockTextGenerator != null) {
+      return (await mockTextGenerator!(prompt)).trim();
+    }
+
+    final configuredProxyUrl = aiProxyUrl.trim();
+    if (configuredProxyUrl.isEmpty) {
+      throw Exception(
+        'AI_PROXY_URL must be configured. Direct Gemini API calls are disabled '
+        'to protect API keys and avoid browser-side rate-limit failures.',
+      );
+    }
+    try {
+      return await _generateAiTextViaProxy(
+        proxyUrl: configuredProxyUrl,
+        prompt: prompt,
+        systemPrompt: systemPrompt,
+        temperature: temperature,
+        maxTokens: maxTokens,
+      );
+    } catch (e) {
+      AppLogger.error('AI proxy request failed: $e');
+      throw Exception(
+        'AI proxy request failed. Verify gemini-chat-proxy deployment, CORS, '
+        'and authenticated Supabase session.',
+      );
+    }
+  }
+
+  Future<String> _generateAiTextViaProxy({
+    required String proxyUrl,
+    required String prompt,
+    required String systemPrompt,
+    required double temperature,
+    required int maxTokens,
+  }) async {
+    // Fallback for existing setups where only SUPABASE_ANON_KEY is defined.
+    final proxyAnonKey = aiProxyAnonKey.trim();
+    if (proxyAnonKey.isEmpty) {
+      throw Exception(
+        'Missing anon key for AI proxy calls. Set AI_PROXY_ANON_KEY or SUPABASE_ANON_KEY in .env.',
+      );
+    }
+
+    Future<http.Response> sendRequest(String bearerToken) {
+      return _httpClient
+          .post(
+            Uri.parse(proxyUrl),
+            headers: {
+              'Authorization': 'Bearer $bearerToken',
+              'apikey': proxyAnonKey,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode({
+              'model': aiChatModel,
+              'prompt': prompt,
+              'systemPrompt': systemPrompt,
+              'temperature': temperature,
+              'maxTokens': maxTokens,
+            }),
+          )
+          .timeout(const Duration(seconds: 45));
+    }
+
+    bool isProviderRateLimited(http.Response response) {
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return false;
       }
-    ''';
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is! Map<String, dynamic>) return false;
+        return decoded['degraded'] == true &&
+            decoded['reason']?.toString() == 'provider_rate_limited';
+      } catch (_) {
+        return false;
+      }
+    }
+
+    final initialToken = (await proxyAccessTokenProvider?.call())?.trim();
+    var activeToken = (initialToken != null && initialToken.isNotEmpty)
+        ? initialToken
+        : proxyAnonKey;
+    var response = await sendRequest(activeToken);
+
+    if (response.statusCode == 401) {
+      String? refreshedToken;
+      try {
+        refreshedToken = (await proxyAccessTokenRefreshProvider?.call())?.trim();
+      } catch (refreshError) {
+        AppLogger.warning('AI proxy token refresh failed: $refreshError');
+      }
+      if (refreshedToken != null && refreshedToken.isNotEmpty) {
+        activeToken = refreshedToken;
+        response = await sendRequest(activeToken);
+      }
+    }
+
+    if (response.statusCode == 401 && activeToken != proxyAnonKey) {
+      response = await sendRequest(proxyAnonKey);
+    }
+
+    if (isProviderRateLimited(response)) {
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      response = await sendRequest(activeToken);
+      if (response.statusCode == 401 && activeToken != proxyAnonKey) {
+        response = await sendRequest(proxyAnonKey);
+      }
+    }
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      if (response.statusCode == 401) {
+        throw Exception(
+          'AI proxy authentication failed (401). Re-login and verify '
+          'gemini-chat-proxy auth settings.',
+        );
+      }
+      throw Exception(
+        'AI proxy failed (${response.statusCode}): ${response.body}',
+      );
+    }
+
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw Exception('AI proxy returned invalid response shape.');
+    }
+
+    final text = decoded['text']?.toString().trim();
+    if (text == null || text.isEmpty) {
+      throw Exception('AI proxy returned empty text.');
+    }
+
+    return text;
+  }
+
+  Future<Map<String, dynamic>?> parseLabReport(
+    Uint8List fileBytes,
+    String mimeType, {
+    String filename = 'lab_report.pdf',
+    void Function(LabParseStage stage)? onStageChanged,
+  }) async {
+    final normalizedMime = mimeType.toLowerCase();
 
     try {
-      final content = [
-        Content.multi([TextPart(prompt), DataPart(mimeType, imageBytes)]),
-      ];
-
-      final response = await _visionModel.generateContent(content);
-      final text = response.text;
-      if (text == null || text.isEmpty) {
-        throw Exception('Empty response from AI');
+      if (!normalizedMime.contains('pdf')) {
+        throw Exception(
+          'Only PDF parsing is supported in current AI mode. Please upload a PDF lab report.',
+        );
       }
 
-      String jsonStr = _extractJson(text);
-      final parsed = jsonDecode(jsonStr);
-
-      if (parsed is! Map<String, dynamic> ||
-          !parsed.containsKey('test_results')) {
-        throw Exception('Invalid JSON structure returned by AI');
+      if (!_llamaParseService.isConfigured) {
+        throw Exception(
+          'LLAMAPARSE_API_KEY is required for PDF parsing in current AI mode.',
+        );
       }
 
-      // final validation / cleaning / normalisation
-      if (parsed['test_results'] is List) {
-        for (var test in parsed['test_results']) {
-          // Normalise using our utility
-          final normalized = MedicalTermsNormalizer.normalize(
-            test['original_name']?.toString() ??
-                test['test_name']?.toString() ??
-                '',
-          );
+      onStageChanged?.call(LabParseStage.parsing);
+      final markdown = await _llamaParseService.parseLabPdf(
+        fileBytes,
+        filename: filename,
+      );
 
-          test['test_name'] = normalized.standardizedName;
-          if (test['loinc_code'] == null || test['loinc_code'] == '') {
-            test['loinc_code'] = normalized.loincCode;
-          }
-
-          // Fallback status calculation if AI missed it
-          if (test['status'] == null || test['status'] == '') {
-            test['status'] =
-                _calculateStatus(
-                  test['result_value']?.toString() ?? '',
-                  test['reference_range']?.toString() ?? '',
-                ) ??
-                'Normal';
-          }
-        }
-      }
-
-      return parsed;
+      onStageChanged?.call(LabParseStage.extracting);
+      final parsed = await _extractFromMarkdown(markdown);
+      parsed['source_markdown'] = markdown;
+      return _normalizeParsedReport(parsed);
     } catch (e) {
       AppLogger.error('Error parsing lab report: $e');
       rethrow;
     }
+  }
+
+  Future<Map<String, dynamic>> _extractFromMarkdown(String markdown) async {
+    final prompt =
+        '''
+You are an expert Medical Data Extractor.
+You are given a medical lab report in MARKDOWN format.
+
+CRITICAL INSTRUCTIONS:
+1. Preserve every row-level measurement exactly from the markdown tables.
+2. For each test, extract:
+   - test_name
+   - original_name
+   - loinc_code
+   - result_value
+   - unit
+   - reference_range
+   - status (High/Low/Normal)
+3. If status is missing, infer from result_value and reference_range.
+4. Extract report-level metadata:
+   - lab_provider
+   - lab_name
+   - date (YYYY-MM-DD)
+5. Return STRICT JSON only.
+
+OUTPUT FORMAT:
+{
+  "lab_provider": "Quest, Labcorp, or Other",
+  "lab_name": "Full Lab Name",
+  "date": "YYYY-MM-DD",
+  "test_results": [
+    {
+      "test_name": "Standardized Name",
+      "original_name": "Raw Name",
+      "loinc_code": "LOINC Code",
+      "result_value": "Numeric or String Value",
+      "unit": "Unit",
+      "reference_range": "Range String",
+      "status": "High, Low, or Normal"
+    }
+  ]
+}
+
+MARKDOWN REPORT:
+$markdown
+''';
+
+    final text = await _generateAiText(
+      prompt: prompt,
+      systemPrompt:
+          'You are an expert medical data extractor. Return strict JSON only.',
+      temperature: 0.1,
+      maxTokens: 1200,
+    );
+    if (text.isEmpty) {
+      throw Exception('Empty extraction response from AI model.');
+    }
+
+    final parsed = jsonDecode(_extractJson(text));
+    if (parsed is! Map<String, dynamic> ||
+        !parsed.containsKey('test_results')) {
+      throw Exception('AI markdown extraction returned invalid JSON.');
+    }
+
+    return parsed;
+  }
+
+  Map<String, dynamic> _normalizeParsedReport(Map<String, dynamic> parsed) {
+    final normalized = Map<String, dynamic>.from(parsed);
+    final testResults = normalized['test_results'];
+
+    if (testResults is! List) {
+      throw Exception('Parsed report is missing test_results list.');
+    }
+
+    final cleanedTests = <Map<String, dynamic>>[];
+    for (final raw in testResults) {
+      if (raw is! Map) continue;
+      final test = Map<String, dynamic>.from(raw);
+
+      final sourceName =
+          test['original_name']?.toString() ??
+          test['test_name']?.toString() ??
+          test['name']?.toString() ??
+          '';
+      final normalizedTerm = MedicalTermsNormalizer.normalize(sourceName);
+
+      test['test_name'] = normalizedTerm.standardizedName;
+      if (test['loinc_code'] == null || test['loinc_code'] == '') {
+        test['loinc_code'] = normalizedTerm.loincCode;
+      }
+
+      if (test['result_value'] == null && test['result'] != null) {
+        test['result_value'] = test['result'];
+      }
+      if (test['reference_range'] == null && test['reference'] != null) {
+        test['reference_range'] = test['reference'];
+      }
+
+      if (test['status'] == null || test['status'] == '') {
+        test['status'] =
+            _calculateStatus(
+              test['result_value']?.toString() ?? '',
+              test['reference_range']?.toString() ?? '',
+            ) ??
+            'Normal';
+      }
+
+      final cleanedUnit = UnitSanitizer.clean(test['unit']?.toString());
+      if (cleanedUnit != null) {
+        test['unit'] = cleanedUnit;
+      }
+
+      cleanedTests.add(test);
+    }
+
+    normalized['test_results'] = cleanedTests;
+    return normalized;
   }
 
   String? _calculateStatus(String resultValue, String referenceRange) {
@@ -953,10 +1402,73 @@ class AiService {
     return text.trim();
   }
 
+  String _languageInstruction(String languageCode) {
+    switch (languageCode.toLowerCase()) {
+      case 'es':
+        return 'Respond in plain Spanish, short sentences, and avoid technical jargon unless necessary.';
+      case 'hi':
+        return 'Respond in plain Hindi, short sentences, and avoid technical jargon unless necessary.';
+      case 'fr':
+        return 'Respond in plain French, short sentences, and avoid technical jargon unless necessary.';
+      case 'en':
+      default:
+        return 'Respond in plain English, short sentences, and avoid technical jargon unless necessary.';
+    }
+  }
+
+  List<String> _buildFollowUpPlan({
+    required String query,
+    required List<CriticalAlert> criticalAlerts,
+    required List<MedicationLabInteraction> medicationInteractions,
+  }) {
+    final plan = <String>[];
+
+    if (criticalAlerts.isNotEmpty) {
+      plan.add('Contact your clinician today about critical lab alerts.');
+    }
+
+    if (medicationInteractions.isNotEmpty) {
+      final top = medicationInteractions.toList()
+        ..sort((a, b) => b.severityScore.compareTo(a.severityScore));
+      final first = top.first;
+      plan.add(
+        'Review ${first.medication} and ${first.labMarker} interaction at your next consultation.',
+      );
+    }
+
+    final queryLower = query.toLowerCase();
+    if (queryLower.contains('diet') || queryLower.contains('food')) {
+      plan.add(
+        'Track meals for 7 days and share pattern notes with your doctor.',
+      );
+    }
+    if (queryLower.contains('exercise') || queryLower.contains('workout')) {
+      plan.add(
+        'Maintain a simple activity log to correlate with next lab check.',
+      );
+    }
+
+    if (plan.isEmpty) {
+      plan.add(
+        'Recheck relevant labs at the interval advised by your clinician.',
+      );
+      plan.add('Bring this chat summary to your next medical visit.');
+    }
+
+    return plan.take(4).toList(growable: false);
+  }
+
   String _getPatientContext(UserProfile profile) {
     if (profile.dateOfBirth == null) return 'Gender: ${profile.gender}';
     final age = DateTime.now().difference(profile.dateOfBirth!).inDays ~/ 365;
     final isPediatric = age < 18;
     return 'Age: $age (${isPediatric ? "Pediatric" : "Adult"}), Gender: ${profile.gender}';
+  }
+
+  String _userFacingAiServiceError() {
+    if (kIsWeb) {
+      return 'Unable to reach AI service right now. Please check your network and API configuration.';
+    }
+    return 'Unable to reach AI service right now. Please try again.';
   }
 }

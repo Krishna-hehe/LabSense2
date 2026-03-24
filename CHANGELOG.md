@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of Clear Health (formerly LabSense).
 - Lab Report Management: Upload and manage PDF lab reports.
-- AI-Powered Insights: AI-generated queries and health predictions using Google Gemini.
+- AI-Powered Insights: AI-generated queries and health predictions using NVIDIA NIM.
 - Secure Authentication: Supabase auth with biometric support.
 - Multi-Profile Support: Manage health data for family members.
 - Trend Analysis: Visual charts for health data.
@@ -23,3 +23,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Project renamed from LabSense to Clear Health.
+

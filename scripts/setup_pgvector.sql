@@ -1,31 +1,30 @@
--- Enable the pgvector extension to work with embedding vectors
+-- Enable pgvector
 create extension if not exists vector;
--- Create a table to store your documents
+
+-- Store chunk-level embeddings for lab report retrieval
 create table if not exists test_embeddings (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users(id) on delete cascade not null,
   test_name text not null,
   content text not null,
-  -- The raw text content of the lab result
   metadata jsonb,
-  -- Additional metadata like date, status, etc.
-  embedding vector(768),
-  -- Google Gemini text-embedding-004 produces 768 dimensions
+  chunk_index integer default 0,
+  embedding vector(2048),
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
--- Enable Row Level Security (RLS)
+
 alter table test_embeddings enable row level security;
--- Create a policy that allows users to select only their own embeddings
+
 create policy "Users can select their own embeddings" on test_embeddings for
 select using (auth.uid() = user_id);
--- Create a policy that allows users to insert their own embeddings
+
 create policy "Users can insert their own embeddings" on test_embeddings for
 insert with check (auth.uid() = user_id);
--- Create a policy that allows users to delete their own embeddings
+
 create policy "Users can delete their own embeddings" on test_embeddings for delete using (auth.uid() = user_id);
--- Create a match function to be used via RPC
+
 create or replace function match_test_embeddings (
-    query_embedding vector(768),
+    query_embedding vector(2048),
     match_threshold float,
     match_count int
   ) returns table (
@@ -45,3 +44,6 @@ order by similarity desc
 limit match_count;
 end;
 $$;
+
+drop index if exists test_embeddings_embedding_idx;
+create index if not exists test_embeddings_embedding_idx on test_embeddings using ivfflat (embedding vector_cosine_ops) with (lists = 100);

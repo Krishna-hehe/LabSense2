@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../core/theme.dart';
 import '../../core/navigation.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
+import '../../core/services/upload_service.dart';
+import '../../core/utils/unit_sanitizer.dart';
 import '../../widgets/glass_card.dart';
+import '../../widgets/ocr_review_dialog.dart';
 
 class ResultExpandedPage extends ConsumerStatefulWidget {
   const ResultExpandedPage({super.key});
@@ -40,9 +44,59 @@ class _ResultExpandedPageState extends ConsumerState<ResultExpandedPage> {
     }
   }
 
+  Future<void> _handleUpload(BuildContext context) async {
+    try {
+      final uploadNotifier = ref.read(uploadControllerProvider.notifier);
+      final parsedData = await uploadNotifier.pickAndUpload(context);
+
+      if (parsedData == null || !context.mounted) return;
+
+      final confirmedData = await showDialog<Map<String, dynamic>>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => OcrReviewDialog(initialData: parsedData),
+      );
+
+      if (confirmedData != null && context.mounted) {
+        await uploadNotifier.saveResult(confirmedData);
+        final postSaveState = ref.read(uploadControllerProvider);
+        if (!context.mounted) return;
+        if (postSaveState.error != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(postSaveState.error!),
+              backgroundColor: AppColors.warning,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Lab report added successfully!'),
+              backgroundColor: AppColors.success,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Upload failed: $e'),
+            backgroundColor: AppColors.danger,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final report = ref.watch(selectedReportProvider);
+    final citationSource = ref.watch(selectedCitationSourceProvider);
+    final selectedTest = ref.watch(selectedTestProvider);
 
     if (report == null) {
       return const Center(
@@ -63,9 +117,16 @@ class _ResultExpandedPageState extends ConsumerState<ResultExpandedPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildHeader(context, ref, report),
-            if (tests.isNotEmpty) _buildAiSummary(context, tests, ref),
+            if (citationSource != null)
+              _buildCitationContextBanner(
+                context,
+                ref,
+                citationSource.sourceTag,
+              ),
             if (tests.isNotEmpty)
-              _buildTable(context, tests, ref)
+              _buildAiSummary(context, tests, report.date, ref),
+            if (tests.isNotEmpty)
+              _buildTable(context, tests, ref, selectedTest)
             else
               Padding(
                 padding: const EdgeInsets.all(40.0),
@@ -160,6 +221,12 @@ class _ResultExpandedPageState extends ConsumerState<ResultExpandedPage> {
           ),
           const SizedBox(width: 8),
           IconButton(
+            icon: const Icon(Icons.upload_file_outlined, color: AppColors.primary),
+            tooltip: 'Upload Lab Report',
+            onPressed: () => _handleUpload(context),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
             icon: const Icon(Icons.delete_outline, color: AppColors.danger),
             onPressed: () async {
               final confirm = await showDialog<bool>(
@@ -225,17 +292,60 @@ class _ResultExpandedPageState extends ConsumerState<ResultExpandedPage> {
     );
   }
 
+  Widget _buildCitationContextBanner(
+    BuildContext context,
+    WidgetRef ref,
+    String sourceTag,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.primary.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.link, size: 16, color: AppColors.primary),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Opened from chat citation: $sourceTag',
+                style: const TextStyle(fontSize: 12, color: AppColors.primary),
+              ),
+            ),
+            TextButton(
+              onPressed: () =>
+                  ref.read(selectedCitationSourceProvider.notifier).state =
+                      null,
+              child: const Text('Clear'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildAiSummary(
     BuildContext context,
     List<TestResult> tests,
+    DateTime reportDate,
     WidgetRef ref,
   ) {
     final testData = tests
         .map(
           (t) => <String, dynamic>{
-            'name': t.name,
-            'result': t.result,
-            'reference': t.reference,
+            'test_results': [
+              {
+                'name': t.name,
+                'value': t.result,
+                'unit': getDisplayUnit({'unit': t.unit}),
+                'status': t.status.isNotEmpty ? t.status : 'Normal',
+              },
+            ],
+            'date': reportDate.toIso8601String(),
           },
         )
         .toList();
@@ -277,12 +387,18 @@ class _ResultExpandedPageState extends ConsumerState<ResultExpandedPage> {
                 ],
               ),
               const SizedBox(height: 12),
-              Text(
-                summary,
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: AppColors.secondary,
-                  height: 1.5,
+              MarkdownBody(
+                data: summary,
+                softLineBreak: true,
+                styleSheet: MarkdownStyleSheet.fromTheme(
+                  Theme.of(context),
+                ).copyWith(
+                  p: const TextStyle(
+                    fontSize: 14,
+                    color: AppColors.secondary,
+                    height: 1.5,
+                  ),
+                  strong: const TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
             ],
@@ -296,6 +412,7 @@ class _ResultExpandedPageState extends ConsumerState<ResultExpandedPage> {
     BuildContext context,
     List<TestResult> tests,
     WidgetRef ref,
+    TestResult? selectedTest,
   ) {
     return Padding(
       padding: const EdgeInsets.all(24),
@@ -303,7 +420,9 @@ class _ResultExpandedPageState extends ConsumerState<ResultExpandedPage> {
         children: [
           _buildTableHeader(),
           const Divider(height: 1),
-          ...tests.map((test) => _buildTableRow(context, test, ref)),
+          ...tests.map(
+            (test) => _buildTableRow(context, test, ref, selectedTest),
+          ),
         ],
       ),
     );
@@ -375,8 +494,17 @@ class _ResultExpandedPageState extends ConsumerState<ResultExpandedPage> {
     );
   }
 
-  Widget _buildTableRow(BuildContext context, TestResult test, WidgetRef ref) {
+  Widget _buildTableRow(
+    BuildContext context,
+    TestResult test,
+    WidgetRef ref,
+    TestResult? selectedTest,
+  ) {
     final bool isAbnormal = test.status != 'Normal';
+    final bool isCitationTarget =
+        selectedTest != null &&
+        selectedTest.name.isNotEmpty &&
+        selectedTest.name.toLowerCase() == test.name.toLowerCase();
 
     return InkWell(
       onTap: () {
@@ -385,6 +513,9 @@ class _ResultExpandedPageState extends ConsumerState<ResultExpandedPage> {
       },
       child: Container(
         decoration: BoxDecoration(
+          color: isCitationTarget
+              ? AppColors.primary.withValues(alpha: 0.08)
+              : Colors.transparent,
           border: Border(
             bottom: BorderSide(color: Theme.of(context).dividerColor),
           ),
@@ -416,27 +547,15 @@ class _ResultExpandedPageState extends ConsumerState<ResultExpandedPage> {
             ),
             Expanded(
               flex: 2,
-              child: RichText(
-                text: TextSpan(
-                  children: [
-                    TextSpan(
-                      text: test.result,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                        color: isAbnormal
-                            ? AppColors.danger
-                            : AppColors.primary,
-                      ),
-                    ),
-                    TextSpan(
-                      text: ' ${test.unit}',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppColors.secondary,
-                      ),
-                    ),
-                  ],
+              child: Text(
+                formatDisplayValueWithUnit({
+                  'value': test.result,
+                  'unit': test.unit,
+                }),
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  color: isAbnormal ? AppColors.danger : AppColors.primary,
                 ),
               ),
             ),

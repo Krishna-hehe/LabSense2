@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
-import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:clear_health/core/ai_service.dart';
 import 'package:clear_health/core/cache_service.dart';
 import 'package:clear_health/core/vector_service.dart';
@@ -63,25 +62,13 @@ void main() {
       int apiCallCount = 0;
 
       // Use the hook
-      Future<GenerateContentResponse> mockGenerator(
-        Iterable<Content> content,
-      ) async {
+      Future<String> mockGenerator(String prompt) async {
         apiCallCount++;
-        return GenerateContentResponse([
-          Candidate(
-            Content('model', [
-              TextPart('[{"metric": "A1c", "predicted_value": "6.4"}]'),
-            ]),
-            null,
-            null,
-            null,
-            null,
-          ),
-        ], null);
+        return '[{"metric": "A1c", "predicted_value": "6.4"}]';
       }
 
       aiService = AiService(
-        apiKey: 'dummy_key',
+        aiApiKey: 'dummy_key',
         vectorService: mockVectorService,
         cacheService: mockCacheService,
         rateLimiter: mockRateLimiterService,
@@ -128,15 +115,13 @@ void main() {
       when(() => mockCacheService.getAiCache(any())).thenReturn(cachedData);
 
       int apiCallCount = 0;
-      Future<GenerateContentResponse> mockGenerator(
-        Iterable<Content> content,
-      ) async {
+      Future<String> mockGenerator(String prompt) async {
         apiCallCount++;
         throw Exception('Should not be called');
       }
 
       aiService = AiService(
-        apiKey: 'dummy_key',
+        aiApiKey: 'dummy_key',
         vectorService: mockVectorService,
         cacheService: mockCacheService,
         rateLimiter: mockRateLimiterService,
@@ -152,4 +137,3 @@ void main() {
     },
   );
 }
-

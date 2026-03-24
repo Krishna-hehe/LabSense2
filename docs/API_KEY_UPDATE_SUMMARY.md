@@ -1,53 +1,49 @@
 # ✅ API Key & Model Update Summary
 
-## Date: 2026-01-30 10:08
+## Date: 2026-03-22
 
 ---
 
 ## 🔄 Changes Applied
 
-### 1. API Key Updated ✅
+### 1. API Key Handling Updated ✅
 
-**File:** `.env`
-**New Key:** `AIzaSyBVRe76itVHhsmgcttxGglAnaIdSRzdGEk`
+- API keys are now read from environment variables only.
+- No API key values are documented or hardcoded in repository files.
 
----
+### 2. Gemini Free-Tier Model Configured ✅
 
-### 2. Gemini Model Updated ✅
+**Primary model:** `gemini-2.0-flash-lite`
 
-**File:** `lib/core/ai_service.dart`
-**Model:** `gemini-2.5-flash`
+This model is configured as the default for both analysis and chatbot generation in:
 
----
+- `lib/core/app_config.dart`
+- `lib/core/ai_service.dart`
+- `lib/core/providers/core_providers.dart`
 
-### 3. Bugs Fixed 🐛
+### 3. Environment Variables Standardized ✅
 
-**AI Health Insight & Forecast:**
+Use:
 
-- **Issue:** The AI was receiving empty test data because of a JSON key mismatch.
-  - `LabReport.toJson()` outputs `test_results`.
-  - `AiService`'s previous logic expected `testResults` or `value` keys which didn't exist in the JSON map.
-- **Fix:**
-  - Updated `_minifyHistory` to look for **`test_results`**.
-  - Updated `getTrendCorrelationAnalysis` to extract values from the nested `test_results` list.
-  - Fixed a syntax error caused by code duplication during the fix.
+- `GEMINI_API_KEY`
+- `GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta`
+- `GEMINI_CHAT_MODEL=gemini-2.0-flash-lite`
+- `AI_PROXY_URL` (required for runtime AI calls)
 
----
+Legacy fallback for `XAI_API_KEY` remains in place only for compatibility during transition.
 
-### 4. App Status ✅
+### 4. Docs Updated ✅
 
-**Status:** Restarted & Running
-**URL:** `http://localhost:62241`
-**PID:** 55568
+Gemini references are now reflected in key docs:
 
----
-
-## 📋 Next Steps
-
-1. **Verify AI Features:**
-   - **Trend Dashboard:** Check "AI Health Insight" - it should now show valid analysis instead of "unable to perform".
-   - **Health Forecast:** Check prediction cards - "Undefined" error should be gone.
+- `README.md`
+- `docs/ARCHITECTURE.md`
+- `docs/DEVELOPMENT_GUIDE.md`
+- `docs/FEATURES.md`
+- `docs/WORKFLOW.md`
+- `docs/PROJECT_Q_AND_A.md`
 
 ---
 
-**Status:** ALL FIXES APPLIED. Ready for testing.
+**Status:** Gemini migration aligned and documentation normalized.
+

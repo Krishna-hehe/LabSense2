@@ -188,6 +188,8 @@ class ResultDetailPage extends ConsumerWidget {
     final dateStr = date != null
         ? DateFormat('MMMM d, yyyy').format(date)
         : 'Unknown Date';
+    final selectedTest = ref.read(selectedTestProvider);
+    final loinc = selectedTest?.loinc.trim();
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -223,8 +225,10 @@ class ResultDetailPage extends ConsumerWidget {
                       fontSize: 20,
                     ),
                   ),
-                  const Text(
-                    'LOINC: 2160-0',
+                  Text(
+                    loinc != null && loinc.isNotEmpty
+                        ? 'LOINC: $loinc'
+                        : 'LOINC unavailable',
                     style: TextStyle(color: AppColors.secondary, fontSize: 13),
                   ),
                 ],

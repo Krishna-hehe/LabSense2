@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../core/services/audit_service.dart';
 import '../../core/navigation.dart';
 import '../../core/providers.dart';
 import 'login_page_state.dart';
@@ -34,12 +36,26 @@ class AuthHandler {
 
     pageNotifier.setLoading(true);
     try {
+      final supabaseUrl = dotenv.env['SUPABASE_URL']?.trim() ?? '';
+      final supabaseAnonKey = dotenv.env['SUPABASE_ANON_KEY']?.trim() ?? '';
+      if (supabaseUrl.isEmpty || supabaseAnonKey.isEmpty) {
+        throw 'Missing backend config. Set SUPABASE_URL and SUPABASE_ANON_KEY in .env, then restart the app.';
+      }
+      final isSupabaseHost = Uri.tryParse(supabaseUrl)?.host
+              .toLowerCase()
+              .contains('supabase.co') ??
+          false;
+      if (!isSupabaseHost) {
+        throw 'Invalid SUPABASE_URL in .env. Expected https://<project-ref>.supabase.co';
+      }
+
       final validator = _ref.read(inputValidationServiceProvider);
 
       // Rate Limiting (5 attempts / 15 mins)
       final rateLimiter = _ref.read(rateLimiterProvider);
+      final normalizedEmail = email.trim().toLowerCase();
       final waitTime = rateLimiter.checkLimit(
-        'login_attempt',
+        'login_attempt:$normalizedEmail',
         limit: 5,
         window: const Duration(minutes: 15),
       );
@@ -50,8 +66,12 @@ class AuthHandler {
       final emailError = validator.validateEmail(email.trim());
       if (emailError != null) throw emailError;
 
-      final passwordError = validator.validatePassword(password);
-      if (passwordError != null) throw passwordError;
+      if (pageState.isSignUp) {
+        final passwordError = validator.validatePassword(password);
+        if (passwordError != null) throw passwordError;
+      } else if (password.isEmpty) {
+        throw 'Password is required';
+      }
 
       if (pageState.isSignUp && password != confirmPassword) {
         throw 'Passwords do not match.';
@@ -60,6 +80,7 @@ class AuthHandler {
       final authService = _ref.read(authServiceProvider);
       if (pageState.isSignUp) {
         await authService.signUp(email, password, firstName: firstName);
+        rateLimiter.reset('login_attempt:$normalizedEmail');
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -71,6 +92,7 @@ class AuthHandler {
         }
       } else {
         final response = await authService.signIn(email, password);
+        rateLimiter.reset('login_attempt:$normalizedEmail');
 
         if (response.user != null) {
           final factors = await _ref
@@ -92,7 +114,8 @@ class AuthHandler {
         }
       }
     } catch (e) {
-      debugPrint('Auth Error: $e'); // Added for debugging
+      final audit = _ref.read(auditServiceProvider);
+      await audit.log(AuditAction.loginFailure, details: e.toString());
       if (context.mounted) {
         String message =
             'Authentication failed. Please check your credentials.';

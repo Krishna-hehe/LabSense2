@@ -2,32 +2,44 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'notification_service.dart';
 import 'services/log_service.dart';
 import 'package:uuid/uuid.dart';
-// Add this import
 import 'services/input_validation_service.dart';
+import 'utils/unit_sanitizer.dart';
 import '../core/utils/exceptions.dart';
 
 class SupabaseService {
   final SupabaseClient client;
   final InputValidationService validator;
+  static const String _rogueUserId = '00000000-0000-0000-0000-000000000000';
 
   SupabaseService(this.client, this.validator);
 
   // RLS Verification
   Future<void> verifyRlsEnabled() async {
+    final currentUser = client.auth.currentUser;
+    if (currentUser == null) {
+      AppLogger.info('ℹ️ Skipping startup RLS probe (no authenticated user yet).');
+      return;
+    }
+
     try {
-      // Attempt to access another user's data (should fail)
       final testResult = await client
           .from('lab_results')
-          .select()
-          .eq('user_id', 'test-invalid-user-id')
+          .select('id')
+          .eq('user_id', _rogueUserId)
           .limit(1);
 
       if (testResult.isNotEmpty) {
-        throw SecurityException('RLS not properly configured!');
+        throw SecurityException('RLS verification failed for lab_results.');
       }
-    } catch (e) {
-      // Expected to fail - RLS is working
-      AppLogger.info('✅ RLS verification passed');
+      AppLogger.info('✅ Startup RLS probe passed.');
+    } on PostgrestException catch (e) {
+      if (_isExpectedRlsBlock(e)) {
+        AppLogger.info('✅ Startup RLS probe blocked by policy as expected.');
+        return;
+      }
+      throw SecurityException(
+        'RLS verification error (${e.code ?? 'unknown'}): ${e.message}',
+      );
     }
   }
 
@@ -69,7 +81,14 @@ class SupabaseService {
 
       // Apply filter if needed. Note: eq returns a builder we must capture.
       if (profileId != null && profileId.isNotEmpty) {
-        queryBuilder = queryBuilder.eq('profile_id', profileId);
+        final currentUserId = client.auth.currentUser?.id;
+        if (currentUserId != null && profileId == currentUserId) {
+          queryBuilder = queryBuilder.or(
+            'profile_id.eq.$profileId,profile_id.is.null',
+          );
+        } else {
+          queryBuilder = queryBuilder.eq('profile_id', profileId);
+        }
       }
 
       if (searchQuery != null && searchQuery.isNotEmpty) {
@@ -138,22 +157,40 @@ class SupabaseService {
     // Sanitize input data
     final sanitizedData = _sanitizeMap(data);
 
-    // Use upsert to create the profile if it doesn't exist
-    await client.from('profiles').upsert({
-      'id': client.auth.currentUser!.id,
-      'user_id': client.auth.currentUser!.id,
-      ...sanitizedData,
-    });
+    try {
+      // Use upsert to create the profile if it doesn't exist
+      await client.from('profiles').upsert({
+        'id': client.auth.currentUser!.id,
+        'user_id': client.auth.currentUser!.id,
+        ...sanitizedData,
+      });
+    } on PostgrestException catch (e) {
+      if (!_isLegacyProfilesSchemaError(e)) rethrow;
+
+      AppLogger.warning(
+        'Profiles table is on a legacy schema. Retrying profile update with '
+        'legacy-safe fields only.',
+      );
+      await client.from('profiles').upsert({
+        'id': client.auth.currentUser!.id,
+        ..._legacyProfileFields(sanitizedData),
+      });
+    }
   }
 
   Future<void> updateProfileData(String id, Map<String, dynamic> data) async {
     if (client.auth.currentUser == null) return;
     final sanitizedData = _sanitizeMap(data);
-    await client
-        .from('profiles')
-        .update(sanitizedData)
-        .eq('id', id)
-        .eq('user_id', client.auth.currentUser!.id);
+    try {
+      await client
+          .from('profiles')
+          .update(sanitizedData)
+          .eq('id', id)
+          .eq('user_id', client.auth.currentUser!.id);
+    } on PostgrestException catch (e) {
+      if (!_isMissingColumnError(e, 'user_id')) rethrow;
+      await client.from('profiles').update(sanitizedData).eq('id', id);
+    }
   }
 
   // Phase 3: Family Profiles Support
@@ -185,16 +222,36 @@ class SupabaseService {
       ..._sanitizeMap(data),
       'user_id': client.auth.currentUser!.id,
     };
-    await client.from('profiles').insert(profileData);
+    try {
+      await client.from('profiles').insert(profileData);
+    } on PostgrestException catch (e) {
+      if (_isMissingColumnError(e, 'user_id')) {
+        throw StateError(
+          'Family profiles require the profiles schema migration '
+          '(006_fix_profiles_family_schema.sql) before they can be created.',
+        );
+      }
+      rethrow;
+    }
   }
 
   Future<void> deleteProfile(String profileId) async {
     if (client.auth.currentUser == null) return;
-    await client
-        .from('profiles')
-        .delete()
-        .eq('id', profileId)
-        .eq('user_id', client.auth.currentUser!.id); // Security check
+    try {
+      await client
+          .from('profiles')
+          .delete()
+          .eq('id', profileId)
+          .eq('user_id', client.auth.currentUser!.id); // Security check
+    } on PostgrestException catch (e) {
+      if (_isMissingColumnError(e, 'user_id')) {
+        throw StateError(
+          'Family profile deletion requires the profiles schema migration '
+          '(006_fix_profiles_family_schema.sql).',
+        );
+      }
+      rethrow;
+    }
   }
 
   Future<List<Map<String, dynamic>>> getPrescriptions() async {
@@ -357,7 +414,7 @@ class SupabaseService {
                         '0',
                   ) ??
                   0.0,
-              'unit': match['unit'],
+              'unit': UnitSanitizer.clean(match['unit']?.toString()) ?? '',
               'reference': match['reference_range'] ?? match['reference'],
             });
           }
@@ -432,10 +489,18 @@ class SupabaseService {
     }
   }
 
-  Future<void> createLabResult(Map<String, dynamic> data) async {
-    if (client.auth.currentUser == null) return;
+  Future<String?> createLabResult(Map<String, dynamic> data) async {
+    if (client.auth.currentUser == null) return null;
     try {
-      final List<dynamic> testResults = data['test_results'] ?? [];
+      final List<dynamic> rawTestResults = data['test_results'] ?? [];
+      final List<Map<String, dynamic>> testResults = rawTestResults
+          .whereType<Map>()
+          .map((t) {
+            final row = Map<String, dynamic>.from(t);
+            row['unit'] = UnitSanitizer.clean(row['unit']?.toString()) ?? '';
+            return row;
+          })
+          .toList(growable: false);
       final abnormalCount = testResults.where((t) {
         final s = t['status']?.toString().toLowerCase() ?? '';
         return s == 'abnormal' || s == 'high' || s == 'low';
@@ -448,17 +513,25 @@ class SupabaseService {
         data['lab_name']?.toString() ?? 'Manual Upload',
       );
 
-      await client.from('lab_results').insert({
-        'user_id': client.auth.currentUser!.id,
-        'lab_name': sanitizedLabName,
-        'date': data['date'] ?? DateTime.now().toIso8601String().split('T')[0],
-        'status': status,
-        'test_count': testResults.length,
-        'abnormal_count': abnormalCount,
-        'test_results':
-            testResults, // structured data, tough to sanitize recursively, assumed generated by system/AI? User might edit manual results.
-        'storage_path': data['storage_path'],
-      });
+      final inserted = await client
+          .from('lab_results')
+          .insert({
+            'user_id': client.auth.currentUser!.id,
+            'profile_id':
+                data['profile_id']?.toString().isNotEmpty == true
+                ? data['profile_id']
+                : client.auth.currentUser!.id,
+            'lab_name': sanitizedLabName,
+            'date':
+                data['date'] ?? DateTime.now().toIso8601String().split('T')[0],
+            'status': status,
+            'test_count': testResults.length,
+            'abnormal_count': abnormalCount,
+            'test_results': _sanitizeValue(testResults),
+            'storage_path': _sanitizeValue(data['storage_path']),
+          })
+          .select('id')
+          .single();
 
       // Trigger notification
       await NotificationService().showNotification(
@@ -466,6 +539,8 @@ class SupabaseService {
         'Upload Complete',
         'Your lab report has been successfully processed.',
       );
+
+      return inserted['id']?.toString();
     } catch (e) {
       AppLogger.debug('Error creating lab result: $e');
       rethrow;
@@ -510,13 +585,22 @@ class SupabaseService {
     if (user == null) {
       throw Exception('User must be logged in to share results');
     }
+    if (duration <= Duration.zero) {
+      throw const FormatException('Share link duration must be greater than zero');
+    }
 
-    final token = const Uuid().v4(); // Generate a unique token
+    final normalizedProfileId = profileId.trim();
+    final profileIdRegex = RegExp(r'^[0-9a-fA-F-]{36}$');
+    if (!profileIdRegex.hasMatch(normalizedProfileId)) {
+      throw const FormatException('Invalid profile identifier');
+    }
+
+    final token = const Uuid().v4().replaceAll('-', '');
     final expiresAt = DateTime.now().toUtc().add(duration);
 
     await client.from('shared_links').insert({
       'user_id': user.id,
-      'profile_id': profileId,
+      'profile_id': normalizedProfileId,
       'token': token,
       'expires_at': expiresAt.toIso8601String(),
       'permissions': {'view_labs': true}, // Default permissions
@@ -526,10 +610,15 @@ class SupabaseService {
   }
 
   Future<Map<String, dynamic>> getSharedData(String token) async {
+    final normalizedToken = token.trim();
+    final shareTokenRegex = RegExp(r'^[A-Za-z0-9-]{16,128}$');
+    if (!shareTokenRegex.hasMatch(normalizedToken)) {
+      throw const FormatException('Invalid share token format');
+    }
     try {
       final response = await client.rpc(
         'get_shared_data',
-        params: {'link_token': token},
+        params: {'link_token': normalizedToken},
       );
       return response as Map<String, dynamic>;
     } catch (e) {
@@ -539,14 +628,63 @@ class SupabaseService {
   }
 
   Map<String, dynamic> _sanitizeMap(Map<String, dynamic> data) {
-    var sanitized = <String, dynamic>{};
-    data.forEach((key, value) {
-      if (value is String) {
-        sanitized[key] = validator.sanitizeForDb(value);
-      } else {
-        sanitized[key] = value;
-      }
-    });
-    return sanitized;
+    return data.map((key, value) => MapEntry(key, _sanitizeValue(value)));
+  }
+
+  dynamic _sanitizeValue(dynamic value) {
+    if (value is String) {
+      return validator.sanitizeForDb(value);
+    }
+    if (value is List) {
+      return value.map(_sanitizeValue).toList();
+    }
+    if (value is Map) {
+      return value.map(
+        (key, nestedValue) => MapEntry(key.toString(), _sanitizeValue(nestedValue)),
+      );
+    }
+    return value;
+  }
+
+  bool _isExpectedRlsBlock(PostgrestException e) {
+    final code = (e.code ?? '').toLowerCase();
+    final message = e.message.toLowerCase();
+    return code == '42501' ||
+        message.contains('permission denied') ||
+        message.contains('row-level security') ||
+        message.contains('violates row-level security policy');
+  }
+
+  bool _isMissingColumnError(PostgrestException e, String column) {
+    final code = (e.code ?? '').toLowerCase();
+    final message = e.message.toLowerCase();
+    return code == '42703' ||
+        (message.contains('column') && message.contains(column.toLowerCase()));
+  }
+
+  bool _isLegacyProfilesSchemaError(PostgrestException e) {
+    return _isMissingColumnError(e, 'user_id') ||
+        _isMissingColumnError(e, 'phone_number') ||
+        _isMissingColumnError(e, 'state') ||
+        _isMissingColumnError(e, 'postal_code') ||
+        _isMissingColumnError(e, 'country') ||
+        _isMissingColumnError(e, 'email_notifications') ||
+        _isMissingColumnError(e, 'result_reminders');
+  }
+
+  Map<String, dynamic> _legacyProfileFields(Map<String, dynamic> data) {
+    const allowed = {
+      'first_name',
+      'last_name',
+      'relationship',
+      'avatar_color',
+      'avatar_url',
+      'date_of_birth',
+      'gender',
+      'conditions',
+    };
+    return Map<String, dynamic>.fromEntries(
+      data.entries.where((entry) => allowed.contains(entry.key)),
+    );
   }
 }

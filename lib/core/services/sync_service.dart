@@ -2,12 +2,14 @@ import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:flutter/foundation.dart';
+
 import '../services/log_service.dart';
 
 class SyncService extends ChangeNotifier {
   final Connectivity _connectivity = Connectivity();
   final Box _syncBox;
   bool _isOnline = true;
+  bool _isProcessingQueue = false;
   StreamSubscription? _subscription;
 
   SyncService(this._syncBox) {
@@ -49,33 +51,75 @@ class SyncService extends ChangeNotifier {
     };
     await _syncBox.add(item);
     AppLogger.debug('📥 Added to Sync Queue: $action');
+
+    if (_isOnline) {
+      // Best-effort immediate processing so newly added follow-up actions are not stranded.
+      unawaited(_processQueue());
+    }
   }
 
   Future<void> _processQueue() async {
-    if (_syncBox.isEmpty) return;
+    if (_isProcessingQueue || _syncBox.isEmpty) return;
+    _isProcessingQueue = true;
 
     AppLogger.debug('🔄 Processing Sync Queue (${_syncBox.length} items)...');
 
-    // Process items one by one (FIFO)
-    // Note: In a real app, you'd probably want more robust retry logic
-    // For MVP, we just try to process and remove if successful
+    try {
+      // Process until the queue stabilizes so follow-up actions enqueued during sync are also handled.
+      while (_isOnline && _syncBox.isNotEmpty) {
+        var progressed = false;
+        final keys = _syncBox.keys.toList();
+        for (var key in keys) {
+          if (!_isOnline) break;
 
-    final keys = _syncBox.keys.toList();
-    for (var key in keys) {
-      if (!_isOnline) break;
+          try {
+            final rawItem = _syncBox.get(key);
+            if (rawItem is! Map) {
+              AppLogger.error('Dropping malformed sync queue item at key: $key');
+              await _syncBox.delete(key);
+              progressed = true;
+              continue;
+            }
+            final item = Map<String, dynamic>.from(rawItem);
+            final action = item['action']?.toString() ?? '';
+            final rawData = item['data'];
 
-      try {
-        final item = Map<String, dynamic>.from(_syncBox.get(key));
-        final success = await _executeAction(item['action'], item['data']);
+            if (!_allowedActions.contains(action)) {
+              AppLogger.error('Blocked unauthorized action in queue: $action');
+              await _syncBox.delete(key);
+              progressed = true;
+              continue;
+            }
 
-        if (success) {
-          await _syncBox.delete(key);
-          AppLogger.debug('✅ Synced: ${item['action']}');
+            if (rawData is! Map) {
+              AppLogger.error('Dropping malformed sync payload for action: $action');
+              await _syncBox.delete(key);
+              progressed = true;
+              continue;
+            }
+
+            final success = await _executeAction(
+              action,
+              Map<String, dynamic>.from(rawData),
+            );
+
+            if (success) {
+              await _syncBox.delete(key);
+              progressed = true;
+              AppLogger.debug('✅ Synced: ${item['action']}');
+            }
+          } catch (e) {
+            AppLogger.error('❌ Sync Failed for $key: $e');
+            // Keep in queue to retry later
+          }
         }
-      } catch (e) {
-        AppLogger.error('❌ Sync Failed for $key: $e');
-        // Keep in queue to retry later
+
+        if (!progressed) {
+          break;
+        }
       }
+    } finally {
+      _isProcessingQueue = false;
     }
   }
 
@@ -90,7 +134,10 @@ class SyncService extends ChangeNotifier {
   }
 
   // Whitelist allowed actions
-  static const _allowedActions = {'upload', 'delete', 'update'};
+  static const _allowedActions = {
+    'createLabResult',
+    'indexLabEmbeddings',
+  };
 
   Future<bool> _executeAction(String action, Map<String, dynamic> data) async {
     if (!_allowedActions.contains(action)) {

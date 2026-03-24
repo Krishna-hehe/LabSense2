@@ -72,31 +72,42 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
       }
 
       // 2. Initialize Sentry
-      final sentryDsn = AppConfig.sentryDsn;
-
+      final sentryDsn = AppConfig.sentryDsn.trim();
       if (sentryDsn.isNotEmpty) {
-        await SentryFlutter.init((options) {
-          options.dsn = sentryDsn;
-          options.tracesSampleRate = 1.0;
-          options.profilesSampleRate = 1.0;
-        });
+        unawaited(_initSentry(sentryDsn));
       }
 
       // 3. Initialize Supabase
       if (mounted) setState(() => _status = 'Connecting to services...');
       try {
+        final supabaseUrl = SupabaseConfig.url.trim();
+        final supabaseAnonKey = SupabaseConfig.anonKey.trim();
+        if (supabaseUrl.isEmpty || supabaseAnonKey.isEmpty) {
+          throw Exception(
+            'Missing Supabase configuration. Set SUPABASE_URL and '
+            'SUPABASE_ANON_KEY in .env and rebuild the web app.',
+          );
+        }
+        final isSupabaseHost = Uri.tryParse(supabaseUrl)?.host
+                .toLowerCase()
+                .contains('supabase.co') ??
+            false;
+        if (!isSupabaseHost) {
+          throw Exception(
+            'Invalid SUPABASE_URL ($supabaseUrl). It should look like '
+            'https://<project-ref>.supabase.co',
+          );
+        }
         AppLogger.info('🔌 Initializing Supabase...');
         await Supabase.initialize(
-          url: SupabaseConfig.url,
-          anonKey: SupabaseConfig.anonKey,
+          url: supabaseUrl,
+          anonKey: supabaseAnonKey,
         );
         AppLogger.info('✅ Supabase initialized');
 
-        // Verify RLS
-        await ref.read(supabaseServiceProvider).verifyRlsEnabled();
-
         // Set up RLS verification on auth state changes
         _setupRlsVerification();
+        _startStartupRlsProbe();
       } catch (e) {
         throw Exception('Failed to connect to backend: $e');
       }
@@ -104,8 +115,10 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
       // 4. Initialize Local Services
       if (mounted) setState(() => _status = 'Starting local services...');
 
-      // Run these in parallel to speed up
-      await Future.wait([_initNotifications(), _initCache()]);
+      // Keep cache initialization blocking so dependent providers can safely read boxes.
+      await _initCache();
+      // Notifications are non-critical at startup and can initialize in background.
+      unawaited(_initNotifications());
 
       if (mounted) {
         setState(() {
@@ -122,12 +135,44 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
     }
   }
 
+  Future<void> _initSentry(String sentryDsn) async {
+    try {
+      await SentryFlutter.init((options) {
+        options.dsn = sentryDsn;
+        options.tracesSampleRate = 1.0;
+        options.profilesSampleRate = 1.0;
+      });
+      AppLogger.info('✅ Sentry initialized');
+    } catch (e) {
+      AppLogger.warning('⚠️ Sentry init failed: $e');
+    }
+  }
+
+  void _startStartupRlsProbe() {
+    unawaited(() async {
+      try {
+        await ref
+            .read(supabaseServiceProvider)
+            .verifyRlsEnabled()
+            .timeout(const Duration(seconds: 6));
+      } on TimeoutException {
+        AppLogger.warning('⚠️ Startup RLS probe timed out; continuing app boot.');
+      } catch (e) {
+        AppLogger.warning('⚠️ Startup RLS probe failed: $e');
+      }
+    }());
+  }
+
   Future<void> _initNotifications() async {
+    if (kIsWeb) {
+      AppLogger.info('ℹ️ Skipping notification initialization on web.');
+      return;
+    }
     try {
       await NotificationService().init();
-      debugPrint('✅ Notifications initialized');
+      AppLogger.info('✅ Notifications initialized');
     } catch (e) {
-      debugPrint('⚠️ Notification init failed: $e');
+      AppLogger.warning('⚠️ Notification init failed: $e');
       // Don't block app start for this
     }
   }
@@ -135,11 +180,51 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
   Future<void> _initCache() async {
     try {
       await CacheService().init();
-      debugPrint('✅ Cache initialized');
+      AppLogger.info('✅ Cache initialized');
     } catch (e) {
-      debugPrint('⚠️ Cache init failed: $e');
+      AppLogger.warning('⚠️ Cache init failed: $e');
       // Don't block app start for this
     }
+  }
+
+  Widget _buildInitializationErrorApp(String errorText) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error_outline, size: 60, color: Colors.red),
+                const SizedBox(height: 16),
+                const Text(
+                  'Initialization Failed',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                SelectableText(
+                  errorText,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.grey),
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() {
+                      _error = null;
+                      _initApp();
+                    });
+                  },
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   /// Set up RLS verification to run when user authenticates
@@ -171,43 +256,14 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
 
   @override
   Widget build(BuildContext context) {
+    ErrorWidget.builder = (FlutterErrorDetails details) {
+      final msg = details.exceptionAsString();
+      AppLogger.error('Flutter widget error: $msg', stackTrace: details.stack);
+      return _buildInitializationErrorApp(msg);
+    };
+
     if (_error != null) {
-      return MaterialApp(
-        home: Scaffold(
-          body: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.error_outline, size: 60, color: Colors.red),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Initialization Failed',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _error!,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.grey),
-                  ),
-                  const SizedBox(height: 24),
-                  ElevatedButton(
-                    onPressed: () {
-                      setState(() {
-                        _error = null;
-                        _initApp();
-                      });
-                    },
-                    child: const Text('Retry'),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
+      return _buildInitializationErrorApp(_error!);
     }
 
     if (!_isInitialized) {
@@ -227,10 +283,14 @@ class LabSenseApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isAuthLoading = ref.watch(isAuthLoadingProvider);
+    final authLoadingTimedOut =
+        ref.watch(authLoadingTimeoutProvider).value ?? false;
     final themeMode = ref.watch(themeProvider);
-    final currentUser = ref.watch(currentUserProvider);
+    final streamCurrentUser = ref.watch(currentUserProvider);
+    final directCurrentUser = ref.watch(directCurrentUserProvider);
+    final currentUser = streamCurrentUser ?? directCurrentUser;
 
-    if (isAuthLoading) {
+    if (isAuthLoading && !authLoadingTimedOut) {
       return MaterialApp(
         debugShowCheckedModeBanner: false,
         theme: themeMode == ThemeMode.dark
@@ -251,7 +311,8 @@ class LabSenseApp extends ConsumerWidget {
           : SessionTimeoutManager(
               duration: const Duration(minutes: 5),
               onTimeout: () {
-                ref.read(appLockProvider.notifier).state = true;
+                Supabase.instance.client.auth.signOut();
+                ref.read(appLockProvider.notifier).state = false;
               },
               child: const SecurityWrapper(
                 child: MainLayout(child: SizedBox()),
@@ -311,7 +372,7 @@ class _SecurityWrapperState extends ConsumerState<SecurityWrapper>
         // await FlutterWindowManager.addFlags(FlutterWindowManager.FLAG_SECURE);
       }
     } catch (e) {
-      debugPrint('Failed to set secure flags: $e');
+      AppLogger.warning('Failed to set secure flags: $e');
     }
   }
 
@@ -319,7 +380,7 @@ class _SecurityWrapperState extends ConsumerState<SecurityWrapper>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive) {
-      // App went to background - blur or lock could happen here if strict
+      ref.read(appLockProvider.notifier).state = true;
     }
   }
 

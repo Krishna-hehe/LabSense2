@@ -56,6 +56,35 @@ class NotificationService {
     );
   }
 
+  Future<void> scheduleOneTimeReminder({
+    required String reminderId,
+    required String title,
+    required String body,
+    required Duration delay,
+  }) async {
+    final now = tz.TZDateTime.now(tz.local);
+    final scheduledDate = now.add(delay);
+
+    await _notificationsPlugin.zonedSchedule(
+      reminderId.hashCode,
+      title,
+      body,
+      scheduledDate,
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'critical_alerts',
+          'Critical Alerts',
+          channelDescription: 'Critical health alert reminders',
+          importance: Importance.max,
+          priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(),
+      ),
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      matchDateTimeComponents: null,
+    );
+  }
+
   Future<void> scheduleReminders({
     required String scheduleId, // generic string ID
     required String title,

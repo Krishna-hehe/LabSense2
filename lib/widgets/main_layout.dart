@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/navigation.dart';
 import '../core/providers.dart';
 import '../core/services/upload_service.dart';
+import '../core/theme.dart';
 import '../features/shared/ambient_background.dart';
 import 'navigation/floating_dock.dart';
 import 'navigation/app_navbar.dart';
@@ -101,11 +102,35 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
                           children: [
                             if (uploadState.isUploading)
                               LinearProgressIndicator(
+                                value: uploadState.progress > 0
+                                    ? uploadState.progress / 100
+                                    : null,
                                 backgroundColor: const Color(
                                   0xFF00F0FF,
                                 ).withValues(alpha: 0.2), // Cyan 20%
                                 valueColor: const AlwaysStoppedAnimation<Color>(
                                   Color(0xFF00F0FF), // Cyan
+                                ),
+                              ),
+                            if (uploadState.isUploading &&
+                                uploadState.status != null)
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  12,
+                                  8,
+                                  12,
+                                  0,
+                                ),
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Text(
+                                    uploadState.status!,
+                                    style: const TextStyle(
+                                      color: AppColors.secondary,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
                                 ),
                               ),
                             if (currentNav != NavItem.landing)

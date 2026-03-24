@@ -218,14 +218,25 @@ class _FloatingDockState extends ConsumerState<FloatingDock> {
       if (confirmedData != null && context.mounted) {
         await uploadNotifier.saveResult(confirmedData);
 
+        final postSaveState = ref.read(uploadControllerProvider);
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Lab report added successfully!'),
-              backgroundColor: AppColors.success,
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
+          if (postSaveState.error != null) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(postSaveState.error!),
+                backgroundColor: AppColors.warning,
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Lab report added successfully!'),
+                backgroundColor: AppColors.success,
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
         }
       }
     } catch (e) {

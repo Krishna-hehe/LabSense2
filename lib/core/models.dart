@@ -1,3 +1,5 @@
+import 'utils/unit_sanitizer.dart';
+
 class TestResult {
   final String name;
   final String originalName;
@@ -24,7 +26,7 @@ class TestResult {
       loinc: json['loinc'] ?? json['loinc_code'] ?? '',
       result:
           json['result_value']?.toString() ?? json['result']?.toString() ?? '',
-      unit: json['unit'] ?? '',
+      unit: UnitSanitizer.clean(json['unit']?.toString()) ?? '',
       reference: json['reference_range'] ?? json['reference'] ?? '',
       status: json['status'] ?? 'Normal',
     );
@@ -131,9 +133,10 @@ class UserProfile {
   String get fullName => '$firstName $lastName'.trim();
 
   factory UserProfile.fromJson(Map<String, dynamic> json) {
+    final id = json['id']?.toString() ?? '';
     return UserProfile(
-      id: json['id']?.toString() ?? '',
-      userId: json['user_id']?.toString() ?? '',
+      id: id,
+      userId: json['user_id']?.toString() ?? id,
       firstName: json['first_name'] ?? '',
       lastName: json['last_name'] ?? '',
       relationship: json['relationship'] ?? 'Self',

@@ -5,6 +5,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../core/theme.dart';
 import '../../core/providers.dart';
+import '../../core/utils/unit_sanitizer.dart';
 
 class TrendsPage extends ConsumerStatefulWidget {
   const TrendsPage({super.key});
@@ -96,7 +97,7 @@ class _TrendsPageState extends ConsumerState<TrendsPage> with SingleTickerProvid
 
   void _updateSpots() {
     if (_rawData.isNotEmpty) {
-      _unit = _rawData.last['unit'] ?? '';
+      _unit = UnitSanitizer.clean(_rawData.last['unit']?.toString()) ?? '';
       _reference = _rawData.last['reference'] ?? '';
       
       _spots = [];
@@ -123,7 +124,7 @@ class _TrendsPageState extends ConsumerState<TrendsPage> with SingleTickerProvid
     try {
       final dataPoints = _rawData.map((d) {
         final date = d['date'].toString().split('T')[0];
-        return '$date: ${d['value']} $_unit';
+        return '$date: ${formatDisplayValueWithUnit({'value': d['value'], 'unit': d['unit']})}';
       }).join(', ');
 
       final prompt = "Analyze the trend for $_selectedTest based on these historical data points: $dataPoints. "

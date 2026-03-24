@@ -118,7 +118,10 @@ class SmartInsightCard extends ConsumerWidget {
           color: const Color(0xFF1E293B),
           borderRadius: BorderRadius.circular(16),
         ),
-        child: Text('Error: $e', style: const TextStyle(color: Colors.red)),
+        child: const Text(
+          'Unable to load health forecast right now.',
+          style: TextStyle(color: Colors.red),
+        ),
       ),
     );
   }

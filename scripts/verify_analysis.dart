@@ -10,6 +10,9 @@ class MockVectorService extends VectorService {
   Future<List<Map<String, dynamic>>> searchSimilarChunks(
     String query, {
     int limit = 5,
+    int candidateLimit = 20,
+    double minSimilarity = 0.5,
+    Map<String, String>? metadataFilters,
   }) async => [];
 
   @override
@@ -63,4 +66,3 @@ void main() async {
   print('- recommendation (Max 15 words)');
   print('- potentialCauses (List instead of paragraph)');
 }
-

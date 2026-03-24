@@ -19,6 +19,7 @@ final labRepositoryProvider = Provider<LabRepository>((ref) {
     ref.watch(syncServiceProvider),
     ref.watch(storageServiceProvider),
     ref.watch(auditServiceProvider),
+    ref.watch(vectorServiceProvider),
   );
 });
 
@@ -91,7 +92,9 @@ class LabResultsNotifier extends AsyncNotifier<List<LabReport>> {
       _currentPage = 0;
       _hasMore = true;
       final profileId = ref.read(selectedProfileIdProvider);
-      return ref.read(labRepositoryProvider).getLabResults(
+      return ref
+          .read(labRepositoryProvider)
+          .getLabResults(
             limit: _pageSize,
             offset: 0,
             profileId: profileId,
@@ -106,7 +109,9 @@ class LabResultsNotifier extends AsyncNotifier<List<LabReport>> {
       _currentPage = 0;
       _hasMore = true;
       final profileId = ref.read(selectedProfileIdProvider);
-      return ref.read(labRepositoryProvider).getLabResults(
+      return ref
+          .read(labRepositoryProvider)
+          .getLabResults(
             limit: _pageSize,
             offset: 0,
             profileId: profileId,

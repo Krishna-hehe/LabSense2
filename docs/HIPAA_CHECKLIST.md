@@ -33,7 +33,7 @@ Ensuring HIPAA compliance involves Technical Safeguards, Physical Safeguards, an
 ### A. Business Associate Agreements (BAA)
 
 - [ ] **Supabase**: You must be on the **Team/Enterprise Plan** to sign a BAA. Free tier is NOT HIPAA compliant.
-- [ ] **Google Cloud (Gemini)**: Consumer API keys (AI Studio) are generally NOT HIPAA compliant. You must use **Vertex AI on Google Cloud** and enable the appropriate compliance settings.
+- [ ] **Google Cloud (NIM)**: Consumer API keys (AI Studio) are generally NOT HIPAA compliant. You must use **Vertex AI on Google Cloud** and enable the appropriate compliance settings.
 
 ### B. Data Minimization
 
@@ -51,3 +51,4 @@ Ensuring HIPAA compliance involves Technical Safeguards, Physical Safeguards, an
 
 1. **Implement Auto-Logout Service**: Wrap the application in a `Listener` that tracks touch events and resets a timer.
 2. **Secure Local Storage**: Migration utility to move `SharedPreferences` data to `FlutterSecureStorage`.
+

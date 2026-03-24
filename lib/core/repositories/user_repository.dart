@@ -33,7 +33,16 @@ class UserRepository {
     try {
       final List<Map<String, dynamic>> data = await _supabaseService
           .getProfiles();
-      return data.map((json) => UserProfile.fromJson(json)).toList();
+      final profiles = data.map((json) => UserProfile.fromJson(json)).toList();
+      profiles.sort((a, b) {
+        final aIsSelf = a.id == a.userId;
+        final bIsSelf = b.id == b.userId;
+        if (aIsSelf != bIsSelf) {
+          return aIsSelf ? -1 : 1;
+        }
+        return a.firstName.toLowerCase().compareTo(b.firstName.toLowerCase());
+      });
+      return profiles;
     } catch (e) {
       debugPrint('Error fetching profiles: $e');
       return [];

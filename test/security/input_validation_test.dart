@@ -19,12 +19,13 @@ void main() {
       expect(validator.validateEmail(null), isNotNull);
     });
 
-    test('validatePassword enforces minimum length', () {
-      // Failing case
-      expect(validator.validatePassword('short'), isNotNull, reason: "Password must be at least 8 characters");
-
-      // Passing case
-      expect(validator.validatePassword('longenough'), isNull, reason: "This is a valid password");
+    test('validatePassword enforces strong password policy', () {
+      expect(validator.validatePassword('short'), isNotNull);
+      expect(validator.validatePassword('longenoughpassword'), isNotNull);
+      expect(validator.validatePassword('Longenoughpassword'), isNotNull);
+      expect(validator.validatePassword('Longenough1'), isNotNull);
+      expect(validator.validatePassword('password123'), isNotNull);
+      expect(validator.validatePassword('Str0ng!Pass1'), isNull);
     });
 
     test('sanitizeInput removes script tags', () {

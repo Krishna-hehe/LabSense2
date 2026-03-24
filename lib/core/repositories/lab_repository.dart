@@ -1,12 +1,12 @@
-import 'package:flutter/foundation.dart';
 import '../supabase_service.dart';
 import '../services/sync_service.dart';
 import '../models.dart';
 import '../cache_service.dart';
 import '../storage_service.dart';
+import '../vector_service.dart';
 import '../services/log_service.dart';
-
 import '../services/audit_service.dart';
+import '../utils/unit_sanitizer.dart';
 
 class LabRepository {
   final SupabaseService _supabaseService;
@@ -14,6 +14,7 @@ class LabRepository {
   final SyncService _syncService;
   final StorageService? _storageService;
   final AuditService? _auditService;
+  final VectorService? _vectorService;
 
   LabRepository(
     this._supabaseService,
@@ -21,6 +22,7 @@ class LabRepository {
     this._syncService, [
     this._storageService,
     this._auditService,
+    this._vectorService,
   ]) {
     _syncService.setActionHandler(_handleSyncAction);
   }
@@ -47,7 +49,7 @@ class LabRepository {
       }
       return data.map((json) => LabReport.fromJson(json)).toList();
     } catch (e) {
-      debugPrint('Supabase fetch failed, falling back to cache: $e');
+      AppLogger.warning('Supabase fetch failed, falling back to cache: $e');
       if (offset == 0) {
         final cachedData = _cacheService.getCachedLabResults();
         return cachedData.map((json) => LabReport.fromJson(json)).toList();
@@ -56,9 +58,9 @@ class LabRepository {
     }
   }
 
-  Future<void> createLabResult(Map<String, dynamic> data) async {
+  Future<String?> createLabResult(Map<String, dynamic> data) async {
     if (_syncService.isOnline) {
-      await _supabaseService.createLabResult(data);
+      return await _supabaseService.createLabResult(data);
     } else {
       AppLogger.debug('offline: queuing createLabResult');
       await _syncService.addToQueue('createLabResult', data);
@@ -68,6 +70,7 @@ class LabRepository {
       // Optimistic update - add to cache immediately
       // Note: We need a temporary ID for the UI
       // For now we just queue. Full optimistic UI requires cache list manipulation which happens on fetch.
+      return null;
     }
   }
 
@@ -85,7 +88,7 @@ class LabRepository {
     try {
       return await _supabaseService.getTrendData(testName);
     } catch (e) {
-      debugPrint('Error fetching trend data: $e');
+      AppLogger.warning('Error fetching trend data: $e');
       return [];
     }
   }
@@ -108,7 +111,7 @@ class LabRepository {
             TestResult(
               name: marker,
               result: d['result'] ?? '',
-              unit: d['unit'] ?? '',
+              unit: UnitSanitizer.clean(d['unit']?.toString()) ?? '',
               status: d['status'] ?? 'Normal',
               loinc: '',
               reference: '',
@@ -127,10 +130,66 @@ class LabRepository {
     try {
       switch (action) {
         case 'createLabResult':
-          await _supabaseService.createLabResult(data);
+          final docId = await _supabaseService.createLabResult(data);
+          if (docId == null || docId.isEmpty) {
+            AppLogger.warning(
+              'Queued createLabResult could not persist (missing user/session).',
+            );
+            return false;
+          }
+
+          final vectorService = _vectorService;
+          if (vectorService != null) {
+            if (!vectorService.isConfigured) {
+              AppLogger.warning(
+                'VECTOR_API_KEY missing during sync; deferring indexing job.',
+              );
+              await _syncService.addToQueue('indexLabEmbeddings', {
+                'doc_id': docId,
+                'payload': data,
+              });
+              return true;
+            }
+
+            try {
+              await vectorService.ingestLabReportFromParsedData(
+                data,
+                docId: docId,
+              );
+            } catch (e) {
+              AppLogger.error(
+                'Queued indexing after sync create failed, scheduling retry: $e',
+              );
+              await _syncService.addToQueue('indexLabEmbeddings', {
+                'doc_id': docId,
+                'payload': data,
+              });
+            }
+          }
+          return true;
+        case 'indexLabEmbeddings':
+          final payload = data['payload'];
+          final docId = data['doc_id']?.toString();
+          final vectorService = _vectorService;
+          if (vectorService == null ||
+              payload is! Map ||
+              docId == null ||
+              docId.isEmpty) {
+            return false;
+          }
+          if (!vectorService.isConfigured) {
+            AppLogger.warning(
+              'VECTOR_API_KEY missing; keeping index job queued for retry.',
+            );
+            return false;
+          }
+          await vectorService.ingestLabReportFromParsedData(
+            Map<String, dynamic>.from(payload),
+            docId: docId,
+          );
           return true;
         default:
-          AppLogger.debug('Unknown sync action: $action');
+          AppLogger.warning('Unknown sync action blocked: $action');
           return false;
       }
     } catch (e) {

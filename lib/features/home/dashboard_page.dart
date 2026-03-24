@@ -8,10 +8,12 @@ import '../../core/models.dart';
 import '../../core/providers/dashboard_providers.dart';
 import '../../core/providers.dart';
 import '../../core/navigation.dart';
-import '../../widgets/smart_insight_card.dart';
+import '../../core/services/upload_service.dart';
+import '../../core/utils/unit_sanitizer.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/glass_shimmer.dart';
 import '../../widgets/mini_sparkline.dart';
+import '../../widgets/ocr_review_dialog.dart';
 
 class DashboardPage extends ConsumerStatefulWidget {
   const DashboardPage({super.key});
@@ -72,8 +74,6 @@ class _DashboardPageState extends ConsumerState<DashboardPage>
             _buildAnimatedItem(2, _buildNeedAttentionBox(stats.abnormalTests)),
 
           const SizedBox(height: 32),
-          _buildAnimatedItem(3, const SmartInsightCard()),
-          const SizedBox(height: 32),
 
           LayoutBuilder(
             builder: (context, constraints) {
@@ -90,7 +90,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage>
                   recentResultsAsync.maybeWhen(
                     data: (recent) => _buildAnimatedItem(
                       3,
-                      GlassShimmer(child: _buildAiInsightsCard(recent)),
+                      GlassShimmer(child: _buildHealthSnapshotCard(recent, stats)),
                     ),
                     orElse: () => const SizedBox.shrink(),
                   ),
@@ -102,7 +102,12 @@ class _DashboardPageState extends ConsumerState<DashboardPage>
 
               final rightColumn = Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [_buildAnimatedItem(5, _buildHealthTipsCard())],
+                children: [
+                  _buildAnimatedItem(
+                    5,
+                    _buildNextStepsCard(recentResultsAsync, stats),
+                  ),
+                ],
               );
 
               if (isMobile) {
@@ -128,6 +133,55 @@ class _DashboardPageState extends ConsumerState<DashboardPage>
         ],
       ),
     );
+  }
+
+  Future<void> _handleUpload(BuildContext context) async {
+    try {
+      final uploadNotifier = ref.read(uploadControllerProvider.notifier);
+      final parsedData = await uploadNotifier.pickAndUpload(context);
+
+      if (parsedData == null || !context.mounted) return;
+
+      final confirmedData = await showDialog<Map<String, dynamic>>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => OcrReviewDialog(initialData: parsedData),
+      );
+
+      if (confirmedData != null && context.mounted) {
+        await uploadNotifier.saveResult(confirmedData);
+
+        final postSaveState = ref.read(uploadControllerProvider);
+        if (!context.mounted) return;
+        if (postSaveState.error != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(postSaveState.error!),
+              backgroundColor: AppColors.warning,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Lab report added successfully!'),
+              backgroundColor: AppColors.success,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Upload failed: $e'),
+            backgroundColor: AppColors.danger,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildCategorizedLabResults(List<LabReport> reports) {
@@ -280,7 +334,10 @@ class _DashboardPageState extends ConsumerState<DashboardPage>
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
-                '${test.result} ${test.unit}',
+                formatDisplayValueWithUnit({
+                  'value': test.result,
+                  'unit': test.unit,
+                }),
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   color: isAbnormal
@@ -342,7 +399,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage>
               ),
               const SizedBox(height: 8),
               const Text(
-                'Your AI Health Dashboard is ready.',
+                'Your health dashboard is ready.',
                 style: TextStyle(fontSize: 16, color: AppColors.secondary),
               ),
             ],
@@ -421,163 +478,319 @@ class _DashboardPageState extends ConsumerState<DashboardPage>
     );
   }
 
-  Widget _buildAiInsightsCard(List<LabReport> recentResults) {
-    return Consumer(
-      builder: (context, ref, child) {
-        final insightAsync = ref.watch(dashboardAiInsightProvider);
-        final isDark = Theme.of(context).brightness == Brightness.dark;
-        final contrastColor = isDark ? Colors.white : const Color(0xFF4F46E5);
+  Widget _buildHealthSnapshotCard(List<LabReport> recentResults, DashboardStats stats) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final latestDate = recentResults.isNotEmpty
+        ? DateFormat('MMM d, yyyy').format(recentResults.first.date)
+        : '-';
 
-        return GlassCard(
-          width: double.infinity,
-          padding: const EdgeInsets.all(24),
-          tintColor: const Color(0xFF4F46E5),
-          opacity: 0.1,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return GlassCard(
+      width: double.infinity,
+      padding: const EdgeInsets.all(24),
+      tintColor: const Color(0xFF0EA5E9),
+      opacity: isDark ? 0.12 : 0.06,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Row(
-                children: [
-                  const Icon(
-                    FontAwesomeIcons.robot,
-                    color: AppColors.primaryBrand,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    'AI Health Insight',
-                    style: TextStyle(
-                      color: contrastColor,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              insightAsync.when(
-                data: (insight) => Text(
-                  insight,
-                  style: TextStyle(
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.9)
-                        : const Color(0xFF1E1B4B), // Indigo 900 for Light Mode
-                    fontSize: 14,
-                    height: 1.5,
-                  ),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE0F2FE),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                loading: () => const Center(
-                  child: CircularProgressIndicator(
-                    color: AppColors.primaryBrand,
-                  ),
-                ),
-                error: (e, s) => Text(
-                  'Failed to load insight: $e',
-                  style: const TextStyle(color: AppColors.danger),
+                child: const Icon(
+                  Icons.health_and_safety_outlined,
+                  color: Color(0xFF0284C7),
+                  size: 20,
                 ),
               ),
-              const SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: () {
-                  ref.read(navigationProvider.notifier).state =
-                      NavItem.healthChat;
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primaryBrand,
-                  foregroundColor: Colors.black,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 14,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
+              const SizedBox(width: 12),
+              Text(
+                'Health Snapshot',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE0F2FE),
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 child: const Text(
-                  'View Full Analysis',
-                  style: TextStyle(fontWeight: FontWeight.bold),
+                  'NON-AI',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF0369A1),
+                  ),
                 ),
               ),
             ],
           ),
-        );
-      },
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _buildMiniSnapshotStat(
+                  'Latest Report',
+                  latestDate,
+                  Icons.event_note_outlined,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildMiniSnapshotStat(
+                  'Need Attention',
+                  '${stats.reportsNeedingAttention}',
+                  Icons.warning_amber_rounded,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildMiniSnapshotStat(
+                  'Normal Results',
+                  '${stats.normalPct.toStringAsFixed(1)}%',
+                  Icons.check_circle_outline,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              _buildQuickActionChip(
+                label: 'Upload Lab Report',
+                icon: Icons.upload_file_outlined,
+                onTap: () => _handleUpload(context),
+              ),
+              _buildQuickActionChip(
+                label: 'View Trends',
+                icon: Icons.show_chart_rounded,
+                onTap: () {
+                  ref.read(navigationProvider.notifier).state = NavItem.trends;
+                },
+              ),
+              _buildQuickActionChip(
+                label: 'Open Results',
+                icon: Icons.folder_open_outlined,
+                onTap: () {
+                  ref.read(navigationProvider.notifier).state = NavItem.labResults;
+                },
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _buildHealthTipsCard() {
-    final tipsAsync = ref.watch(optimizationTipsProvider);
-
-    return tipsAsync.when(
-      loading: () => Container(
-        height: 150,
-        decoration: BoxDecoration(
-          color: Theme.of(context).cardTheme.color,
-          borderRadius: BorderRadius.circular(16),
+  Widget _buildMiniSnapshotStat(String label, String value, IconData icon) {
+    final textColor = Theme.of(context).colorScheme.onSurface;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardTheme.color?.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: Theme.of(context).dividerColor.withValues(alpha: 0.25),
         ),
-        child: const Center(child: CircularProgressIndicator()),
       ),
-      error: (e, s) => const SizedBox.shrink(),
-      data: (tips) {
-        String tipTitle = 'Health Tip';
-        String tipText =
-            'Upload your lab reports to receive personalized health tips.';
-        Color themeColor = const Color(0xFFD97706); // Amber default
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 16, color: AppColors.primaryBrand),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 11, color: AppColors.secondary),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: textColor,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
 
-        if (tips.isNotEmpty) {
-          final firstTip = tips.first;
-          final type = firstTip['type']?.toString() ?? 'General';
-
-          if (type == 'Maintenance' || type == 'General') {
-            themeColor = AppColors.success;
-            tipTitle = 'Wellness Tip';
-            tipText = '${firstTip['title']}: ${firstTip['description']}';
-          } else {
-            themeColor = AppColors.warning;
-            tipTitle = 'Optimization Tip';
-            tipText = '${firstTip['title']}: ${firstTip['description']}';
-          }
-        }
-
-        final isDark = Theme.of(context).brightness == Brightness.dark;
-        final tipTextColor = isDark
-            ? themeColor.withRed(255).withGreen(255).withBlue(255)
-            : themeColor;
-
-        return GlassCard(
-          padding: const EdgeInsets.all(24),
-          tintColor: themeColor,
-          opacity: isDark ? 0.15 : 0.05,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildQuickActionChip({
+    required String label,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFFE0F2FE),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: const Color(0xFFBAE6FD)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Row(
-                children: [
-                  Icon(Icons.lightbulb_outline, color: themeColor, size: 20),
-                  const SizedBox(width: 12),
-                  Text(
-                    tipTitle,
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                      color: themeColor,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
+              Icon(icon, size: 14, color: const Color(0xFF0369A1)),
+              const SizedBox(width: 6),
               Text(
-                tipText,
-                style: TextStyle(
-                  color: tipTextColor,
-                  fontSize: 14,
-                  height: 1.5,
+                label,
+                style: const TextStyle(
+                  color: Color(0xFF0C4A6E),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ],
           ),
-        );
-      },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNextStepsCard(
+    AsyncValue<List<LabReport>> recentResultsAsync,
+    DashboardStats stats,
+  ) {
+    final hasReports = recentResultsAsync.maybeWhen(
+      data: (reports) => reports.isNotEmpty,
+      orElse: () => false,
+    );
+    final hasAttentionItems = stats.reportsNeedingAttention > 0;
+    final completion = hasReports
+        ? (hasAttentionItems ? 67 : 100)
+        : 33;
+
+    final steps = <({String label, bool done, VoidCallback onTap})>[
+      (
+        label: 'Upload at least one lab report',
+        done: hasReports,
+        onTap: () => ref.read(navigationProvider.notifier).state = NavItem.labResults,
+      ),
+      (
+        label: 'Review abnormal markers',
+        done: hasReports && !hasAttentionItems,
+        onTap: () => ref.read(navigationProvider.notifier).state = NavItem.labResults,
+      ),
+      (
+        label: 'Track trends weekly',
+        done: hasReports,
+        onTap: () => ref.read(navigationProvider.notifier).state = NavItem.trends,
+      ),
+    ];
+
+    return GlassCard(
+      padding: const EdgeInsets.all(24),
+      tintColor: const Color(0xFF10B981),
+      opacity: 0.08,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.checklist_rounded, color: Color(0xFF059669), size: 20),
+              const SizedBox(width: 10),
+              Text(
+                'Next Best Steps',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Theme.of(context).colorScheme.onSurface,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Stay on top of your health with this quick non-AI checklist.',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: AppColors.secondary,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(999),
+                  child: LinearProgressIndicator(
+                    value: completion / 100,
+                    minHeight: 8,
+                    backgroundColor: const Color(0xFFD1FAE5),
+                    valueColor: const AlwaysStoppedAnimation(Color(0xFF10B981)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                '$completion%',
+                style: const TextStyle(
+                  color: Color(0xFF047857),
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          ...steps.map((step) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: GestureDetector(
+                onTap: step.onTap,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    children: [
+                      Icon(
+                        step.done ? Icons.check_circle : Icons.radio_button_unchecked,
+                        color: step.done ? AppColors.success : AppColors.secondary,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          step.label,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Theme.of(context).colorScheme.onSurface,
+                            fontWeight: step.done ? FontWeight.w600 : FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      const Icon(
+                        Icons.chevron_right_rounded,
+                        size: 18,
+                        color: AppColors.secondary,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
     );
   }
 
@@ -720,7 +933,10 @@ class _DashboardPageState extends ConsumerState<DashboardPage>
                     ),
                     Expanded(
                       child: Text(
-                        '${test.result} ${test.unit}',
+                        formatDisplayValueWithUnit({
+                          'value': test.result,
+                          'unit': test.unit,
+                        }),
                         style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           color: AppColors.danger,

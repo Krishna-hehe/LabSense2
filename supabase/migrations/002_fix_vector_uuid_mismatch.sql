@@ -1,11 +1,10 @@
 -- CRITICAL FIX: pgvector Extension Configuration
 -- This migration fixes the "operator does not exist: extensions.vector <=> extensions.vector" error
 -- Step 1: Ensure pgvector extension is enabled
-CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions;
 -- Step 2: Drop the old function completely (all variants)
-DROP FUNCTION IF EXISTS match_test_embeddings(vector, float, int);
 DROP FUNCTION IF EXISTS match_test_embeddings(extensions.vector, float, int);
-DROP FUNCTION IF EXISTS match_test_embeddings(vector(768), float, int);
+DROP FUNCTION IF EXISTS match_test_embeddings(extensions.vector(768), float, int);
 -- Step 3: Drop and recreate the test_embeddings table
 DROP TABLE IF EXISTS public.test_embeddings CASCADE;
 CREATE TABLE public.test_embeddings (
@@ -14,7 +13,7 @@ CREATE TABLE public.test_embeddings (
     test_name text NOT NULL,
     content text NOT NULL,
     metadata jsonb,
-    embedding vector(768),
+    embedding extensions.vector(768),
     created_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 -- Step 4: Enable Row Level Security
@@ -28,7 +27,7 @@ CREATE POLICY "Users can delete their own embeddings" ON public.test_embeddings 
 -- Step 6: Create the match function with CORRECT schema path
 -- CRITICAL: Use 'public' schema explicitly, not 'extensions'
 CREATE OR REPLACE FUNCTION public.match_test_embeddings (
-        query_embedding vector(768),
+        query_embedding extensions.vector(768),
         match_threshold float,
         match_count int
     ) RETURNS TABLE (
@@ -54,10 +53,10 @@ $$;
 -- Step 7: Grant necessary permissions
 GRANT USAGE ON SCHEMA public TO authenticated;
 GRANT ALL ON public.test_embeddings TO authenticated;
-GRANT EXECUTE ON FUNCTION public.match_test_embeddings(vector(768), float, int) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.match_test_embeddings(extensions.vector(768), float, int) TO authenticated;
 -- Step 8: Create indexes for performance
 CREATE INDEX IF NOT EXISTS test_embeddings_user_id_idx ON public.test_embeddings(user_id);
 -- Create vector index using ivfflat (requires pgvector)
-CREATE INDEX IF NOT EXISTS test_embeddings_embedding_idx ON public.test_embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS test_embeddings_embedding_idx ON public.test_embeddings USING ivfflat (embedding extensions.vector_cosine_ops) WITH (lists = 100);
 -- Migration complete
 -- This should fix both the UUID mismatch AND the operator error

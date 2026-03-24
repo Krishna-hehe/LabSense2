@@ -13,7 +13,7 @@
 
 **LabSense2: An Advanced AI-Powered Health Management Platform.**
 
-* **Instant Clarity**: Uses advanced AI (Google Gemini) to transform confusing medical reports into clear, plain-language explanations.
+* **Instant Clarity**: Uses advanced AI (NVIDIA NIM) to transform confusing medical reports into clear, plain-language explanations.
 * **CentralizedHub**: A secure, digital vault for all health records—searchable and organized.
 * **Actionable Insights**: Goes beyond "normal/abnormal" to explain *why* a result matters and what actionable steps might help (disclaimer: not medical advice).
 * **Trend Visualization**: Automatically plots data points over time to visualize progress.
@@ -21,7 +21,7 @@
 ## 3. How It Works
 
 1. **Upload**: User takes a photo or uploads a PDF of their lab report.
-2. **Analyze**: Our AI engine (Gemini) extracts structured data (biomarkers, values, units) and interprets them against standard ranges.
+2. **Analyze**: Our AI engine (NIM) extracts structured data (biomarkers, values, units) and interprets them against standard ranges.
 3. **Understand**: The user receives a simplified summaries of their health status, highlighting attention areas.
 4. **Track**: Data is stored securely, updating trend charts for continuous health monitoring.
 5. **Share**: Securely share specific records or summaries with family members or doctors via "Health Circles."
@@ -77,3 +77,4 @@
 * **Dashboard**: Aesthetic glassmorphic design showing "Bio-Age", "Wellness Score", and key alerts.
 * **Chatbot**: "Ask LabSense" feature for conversational health queries.
 * **Health Circles**: UI for managing permissions and sharing access.
+

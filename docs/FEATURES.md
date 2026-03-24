@@ -13,7 +13,7 @@ Clear Health is a comprehensive health monitoring and analysis platform. Below a
 
 - **Smart Summaries**: Get concise, easy-to-understand summaries of complex lab results.
 - **Optimization Tips**: Receive actionable wellness advice on how to improve specific health markers.
-- **Risk Predictions**: AI-driven health risk assessments based on historical trends and current data (powered by Google Gemini).
+- **Risk Predictions**: AI-driven health risk assessments based on historical trends and current data.
 - **Condition Mapping**: Understanding how different markers correlate with potential health conditions.
 
 ## 📈 Health Trend Analysis
@@ -28,6 +28,7 @@ Clear Health is a comprehensive health monitoring and analysis platform. Below a
 - **Personal Health Assistant**: A dedicated chat interface to ask questions about your specific lab results.
 - **Semantic Search**: AI-powered search through your medical history to find specific events or trends.
 - **Plain Language Explanations**: Ask "What does a high LDL mean for me?" and get personalized answers.
+- **Gemini-Powered Responses**: Chat responses use Google Gemini with a concise, grounded medical guidance prompt.
 
 ## 🔒 Security & Privacy
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/providers.dart';
+import '../../core/utils/unit_sanitizer.dart';
 
 import '../../core/theme.dart';
 import 'package:intl/intl.dart';
@@ -169,9 +170,11 @@ class _DoctorViewPageState extends ConsumerState<DoctorViewPage> {
   }
 
   Widget _buildResultCard(Map<String, dynamic> result) {
-    final date = DateTime.parse(result['date']);
-    final formattedDate = DateFormat.yMMMd().format(date);
-    final testName = result['test_name'] ?? 'Unknown Test';
+    final date = DateTime.tryParse(result['date']?.toString() ?? '');
+    final formattedDate = date != null
+        ? DateFormat.yMMMd().format(date)
+        : 'Unknown Date';
+    final testName = result['lab_name'] ?? result['test_name'] ?? 'Unknown Test';
 
     // Parse test results to find abnormalities
     final testItems = result['test_results'] as List<dynamic>? ?? [];
@@ -211,10 +214,10 @@ class _DoctorViewPageState extends ConsumerState<DoctorViewPage> {
             : const Icon(Icons.check_circle, color: AppColors.success),
         children: [
           ...testItems.map((item) {
-            final name = item['test_name'] ?? '';
-            final value = item['value'] ?? '';
+            final name = item['test_name'] ?? item['name'] ?? '';
+            final value = item['result_value'] ?? item['result'] ?? '';
             final unit = item['unit'] ?? '';
-            final range = item['ref_range'] ?? '';
+            final range = item['reference_range'] ?? item['reference'] ?? '';
             final status = (item['status'] as String? ?? '').toLowerCase();
             final isAbnormal =
                 status.contains('high') || status.contains('low');
@@ -226,7 +229,7 @@ class _DoctorViewPageState extends ConsumerState<DoctorViewPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    '$value $unit',
+                    formatDisplayValueWithUnit({'value': value, 'unit': unit}),
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       color: isAbnormal

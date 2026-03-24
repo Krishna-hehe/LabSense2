@@ -431,7 +431,7 @@ flutter test test/security/rate_limiter_test.dart
 **OUTPUT:**
 
 - Strict CSP meta tags
-- Allow only trusted sources (Supabase, Google Fonts, Gemini API)
+- Allow only trusted sources (Supabase, Google Fonts, NVIDIA NIM API)
 - Block inline scripts and eval()
 
 **VERIFY:**
@@ -454,7 +454,7 @@ flutter test test/security/rate_limiter_test.dart
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
   font-src 'self' https://fonts.gstatic.com;
   img-src 'self' data: https://*.supabase.co;
-  connect-src 'self' https://*.supabase.co https://generativelanguage.googleapis.com;
+  connect-src 'self' https://*.supabase.co https://integrate.api.nvidia.com;
   frame-ancestors 'none';
   base-uri 'self';
   form-action 'self';
@@ -907,3 +907,4 @@ All changes are additive and can be disabled by:
 **Plan Status:** ✅ READY FOR IMPLEMENTATION  
 **Next Step:** User approval → Begin Phase 2A implementation  
 **Estimated Completion:** 3 days (2 hours/day)
+

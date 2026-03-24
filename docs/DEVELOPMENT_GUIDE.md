@@ -31,9 +31,11 @@ The project uses `.env` files for configuration. Create a `.env` file in the roo
 
 ```env
 GEMINI_API_KEY=your_key_here
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+GEMINI_CHAT_MODEL=gemini-2.0-flash-lite
 SUPABASE_URL=your_supabase_project_url
 SUPABASE_ANON_KEY=your_anon_public_key
-LABSENSE_CHAT_API_KEY=optional_chat_key
+AI_PROXY_URL=https://your-project.supabase.co/functions/v1/gemini-chat-proxy
 SENTRY_DSN=optional_sentry_dsn
 ```
 
@@ -99,3 +101,4 @@ flutter build ios --release
 - **Formatting**: Always run `dart format .` before committing.
 - **Linting**: Follow the rules defined in `analysis_options.yaml`.
 - **Documentation**: Adding JSDoc-style comments for complex logic in `lib/core/services/` is encouraged.
+

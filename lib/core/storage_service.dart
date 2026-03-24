@@ -2,6 +2,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'services/rate_limiter_service.dart';
+import 'services/log_service.dart';
 
 class StorageService {
   final SupabaseClient _supabase;
@@ -40,7 +41,7 @@ class StorageService {
 
       return path;
     } catch (e) {
-      debugPrint('Error uploading lab report: $e');
+      AppLogger.error('Error uploading lab report: $e');
       return null;
     }
   }
@@ -113,7 +114,7 @@ class StorageService {
           .getPublicUrl(path);
       return publicUrl;
     } catch (e) {
-      debugPrint('Error uploading prescription image: $e');
+      AppLogger.error('Error uploading prescription image: $e');
       return null;
     }
   }
@@ -131,7 +132,7 @@ class StorageService {
       );
       return result;
     } catch (e) {
-      debugPrint('Compression failed, using original: $e');
+      AppLogger.warning('Compression failed, using original bytes: $e');
       return list;
     }
   }
@@ -141,7 +142,7 @@ class StorageService {
     try {
       await _supabase.storage.from('lab-reports').remove([path]);
     } catch (e) {
-      debugPrint('Error deleting lab report file from storage: $e');
+      AppLogger.error('Error deleting lab report file from storage: $e');
     }
   }
 }

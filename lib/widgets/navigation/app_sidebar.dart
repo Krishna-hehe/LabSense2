@@ -227,20 +227,37 @@ class AppSidebar extends ConsumerWidget {
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(horizontal: 16),
-      child: ElevatedButton.icon(
-        icon: const Icon(FontAwesomeIcons.upload, size: 14),
-        label: const Text('Upload Document'),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: AppColors.primary,
-          foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ElevatedButton.icon(
+            icon: const Icon(FontAwesomeIcons.upload, size: 14),
+            label: const Text('Upload Document'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: uploadState.isUploading
+                ? null
+                : () => _handleUpload(context, ref),
           ),
-        ),
-        onPressed: uploadState.isUploading
-            ? null
-            : () => _handleUpload(context, ref),
+          if (uploadState.isUploading && uploadState.status != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8, left: 4),
+              child: Text(
+                '${uploadState.status!} (${uploadState.progress.toStringAsFixed(0)}%)',
+                style: const TextStyle(
+                  color: AppColors.secondary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -268,14 +285,25 @@ class AppSidebar extends ConsumerWidget {
             .read(uploadControllerProvider.notifier)
             .saveResult(confirmedData);
 
+        final postSaveState = ref.read(uploadControllerProvider);
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Lab report added successfully!'),
-              backgroundColor: AppColors.success,
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
+          if (postSaveState.error != null) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(postSaveState.error!),
+                backgroundColor: AppColors.warning,
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Lab report added successfully!'),
+                backgroundColor: AppColors.success,
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
         }
       }
     } catch (e) {

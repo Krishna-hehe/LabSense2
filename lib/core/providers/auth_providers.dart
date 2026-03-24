@@ -17,6 +17,11 @@ final authStateProvider = StreamProvider<AuthState>((ref) {
   return ref.watch(authServiceProvider).onAuthStateChange;
 });
 
+// Direct session fallback so web UI does not stay stuck if auth stream stalls.
+final directCurrentUserProvider = Provider<User?>((ref) {
+  return ref.watch(authServiceProvider).currentUser;
+});
+
 // Current User Provider
 final currentUserProvider = Provider<User?>((ref) {
   final authState = ref.watch(authStateProvider);
@@ -27,4 +32,10 @@ final currentUserProvider = Provider<User?>((ref) {
 final isAuthLoadingProvider = Provider<bool>((ref) {
   final authState = ref.watch(authStateProvider);
   return authState.isLoading;
+});
+
+// Guardrail timeout to prevent indefinite splash on stalled auth stream.
+final authLoadingTimeoutProvider = FutureProvider<bool>((ref) async {
+  await Future<void>.delayed(const Duration(seconds: 6));
+  return true;
 });

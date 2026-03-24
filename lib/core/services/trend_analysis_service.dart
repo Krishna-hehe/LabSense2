@@ -1,4 +1,5 @@
 import '../models.dart';
+import '../utils/unit_sanitizer.dart';
 
 class TrendAnalysisService {
   /// Normalizes data series to a 0-100 scale based on the global max of all series
@@ -59,7 +60,7 @@ class TrendAnalysisService {
           date: report.date,
           originalValue: val,
           normalizedValue: normalized,
-          unit: test.unit,
+          unit: UnitSanitizer.clean(test.unit) ?? '',
         );
       }).toList();
       
@@ -80,7 +81,7 @@ class TrendAnalysisService {
       final test = r.testResults?.firstWhere((t) => t.name == testName, orElse: () => TestResult(name: '', loinc: '', result: '', unit: '', reference: '', status: ''));
       if (test != null && _isNumeric(test.result)) {
         points.add(double.tryParse(test.result) ?? 0);
-        unit = test.unit;
+        unit = UnitSanitizer.clean(test.unit) ?? '';
       }
     }
 

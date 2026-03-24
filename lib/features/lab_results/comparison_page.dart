@@ -5,6 +5,7 @@ import '../../core/theme.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
 import '../../core/navigation.dart';
+import '../../core/utils/unit_sanitizer.dart';
 import '../../widgets/glass_card.dart';
 
 class ComparisonPage extends ConsumerStatefulWidget {
@@ -184,7 +185,9 @@ class _ComparisonPageState extends ConsumerState<ComparisonPage> {
                     final value = test?.result.isEmpty == true
                         ? '-'
                         : test?.result ?? '-';
-                    final unit = test?.unit ?? '';
+                    final unit = getDisplayUnit({
+                      'unit': test?.unit ?? '',
+                    });
                     final isAbnormal =
                         test?.status.toLowerCase().contains('high') == true ||
                         test?.status.toLowerCase().contains('low') == true;
@@ -308,7 +311,9 @@ class _ComparisonPageState extends ConsumerState<ComparisonPage> {
                     );
                     final hasValue = test?.result.isNotEmpty == true;
                     final value = hasValue ? test!.result : '-';
-                    final unit = test?.unit ?? '';
+                    final unit = getDisplayUnit({
+                      'unit': test?.unit ?? '',
+                    });
                     final isAbnormal =
                         hasValue &&
                         (test?.status.toLowerCase().contains('high') == true ||

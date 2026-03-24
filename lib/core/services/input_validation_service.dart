@@ -1,6 +1,14 @@
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 class InputValidationService {
+  static const Set<String> _commonWeakPasswords = {
+    'password',
+    'password123',
+    '12345678',
+    'qwerty123',
+    'letmein',
+    'admin123',
+    'welcome123',
+  };
+
   // Singleton pattern not strictly needed with Riverpod, but good for static access if needed
 
   /// Validates an email address
@@ -21,8 +29,23 @@ class InputValidationService {
     if (value == null || value.isEmpty) {
       return 'Password is required';
     }
-    if (value.length < 8) {
-      return 'Password must be at least 8 characters';
+    if (value.length < 10) {
+      return 'Password must be at least 10 characters';
+    }
+    if (!_hasUppercase(value)) {
+      return 'Password must include at least one uppercase letter';
+    }
+    if (!_hasLowercase(value)) {
+      return 'Password must include at least one lowercase letter';
+    }
+    if (!_hasDigit(value)) {
+      return 'Password must include at least one number';
+    }
+    if (!_hasSpecial(value)) {
+      return 'Password must include at least one special character';
+    }
+    if (_commonWeakPasswords.contains(value.toLowerCase())) {
+      return 'Please choose a less common password';
     }
     return null;
   }
@@ -102,8 +125,9 @@ class InputValidationService {
         upper.contains('INSERT INTO') ||
         upper.contains('WHERE 1=1');
   }
-}
 
-final inputValidationServiceProvider = Provider<InputValidationService>((ref) {
-  return InputValidationService();
-});
+  bool _hasUppercase(String input) => input.contains(RegExp(r'[A-Z]'));
+  bool _hasLowercase(String input) => input.contains(RegExp(r'[a-z]'));
+  bool _hasDigit(String input) => input.contains(RegExp(r'\d'));
+  bool _hasSpecial(String input) => input.contains(RegExp(r'[^A-Za-z0-9\s]'));
+}

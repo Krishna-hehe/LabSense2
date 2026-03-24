@@ -23,7 +23,7 @@
                style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; 
                font-src 'self' https://fonts.gstatic.com data:; 
                img-src 'self' data: https: blob:; 
-               connect-src 'self' https://*.supabase.co https://generativelanguage.googleapis.com wss://*.supabase.co; 
+               connect-src 'self' https://*.supabase.co https://integrate.api.nvidia.com wss://*.supabase.co; 
                worker-src 'self' blob:; 
                frame-ancestors 'none'; 
                base-uri 'self'; 
@@ -34,7 +34,7 @@
 
 - ✅ Prevents XSS attacks from arbitrary script sources
 - ✅ Allows only Flutter Web's required WASM execution
-- ✅ Restricts external connections to trusted APIs (Supabase, Google Gemini)
+- ✅ Restricts external connections to trusted APIs (Supabase, NVIDIA NIM)
 - ✅ Blocks clickjacking with `frame-ancestors 'none'`
 
 ---
@@ -232,3 +232,4 @@ curl -I https://your-app-url.com
 **Applied by:** Antigravity AI Security Auditor  
 **Date:** 2026-01-29  
 **Review ID:** SEC-2026-01-29-001
+

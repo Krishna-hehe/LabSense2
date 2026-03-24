@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/theme.dart';
 import '../core/providers.dart';
+import '../core/utils/unit_sanitizer.dart';
 
 class OcrReviewDialog extends ConsumerStatefulWidget {
   final Map<String, dynamic> initialData;
@@ -181,24 +182,40 @@ class _OcrReviewDialogState extends ConsumerState<OcrReviewDialog> {
             }
 
             // Sanitize & Save
+            final sourceMarkdown = widget.initialData['source_markdown']
+                ?.toString();
             Navigator.pop(context, {
               'lab_name': validator.sanitizeInput(_labNameController.text),
               'date': validator.sanitizeInput(_dateController.text),
+              if (sourceMarkdown != null && sourceMarkdown.trim().isNotEmpty)
+                'source_markdown': sourceMarkdown,
               'test_results': validTests
                   .map(
                     (t) => {
                       ...t,
                       'name': validator.sanitizeInput(
-                        t['name']?.toString() ?? '',
+                        t['name']?.toString() ??
+                            t['test_name']?.toString() ??
+                            '',
                       ),
-                      // Result is already validated as number, but keep as string or parse
-                      'result': t['result'],
-                      'unit': validator.sanitizeInput(
-                        t['unit']?.toString() ?? '',
+                      'test_name': validator.sanitizeInput(
+                        t['name']?.toString() ??
+                            t['test_name']?.toString() ??
+                            '',
                       ),
-                    },
-                  )
-                  .toList(),
+                       // Result is already validated as number, but keep as string or parse
+                       'result': t['result'] ?? t['result_value'],
+                       'result_value': t['result'] ?? t['result_value'],
+                       'unit':
+                           UnitSanitizer.clean(
+                             validator.sanitizeInput(
+                               t['unit']?.toString() ?? '',
+                             ),
+                           ) ??
+                           '',
+                     },
+                   )
+                   .toList(),
             });
           },
           style: ElevatedButton.styleFrom(

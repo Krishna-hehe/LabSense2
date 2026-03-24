@@ -32,6 +32,7 @@ graph TD
   - **Authentication**: Secure JWT-based auth.
   - **Storage**: PDF lab report storage.
   - **Real-time**: Syncing data across devices.
+  - **Edge Functions**: Backend ingestion queue (`ingestion_jobs`) with retry/dead-letter controls for resilient AI processing.
 - **Local (Hive)**: High-performance NoSQL storage for offline caching, ensuring the app remains functional without an internet connection.
 
 ### Security
@@ -42,11 +43,12 @@ graph TD
 
 ## 🧠 AI Integration
 
-Clear Health leverages the **Google Gemini AI Engine** (via `google_generative_ai`):
+Clear Health uses a specialized AI pipeline:
 
-- **Semantic Embeddings**: Converting lab results into vector representations for intelligent comparisons.
-- **Generative Insights**: Using LLMs to interpret raw medical data into human-readable insights.
-- **Health Chat**: A RAG (Retrieval-Augmented Generation) inspired chat system for queries against medical history.
+- **LlamaParse (PDF preprocessing)**: Converts uploaded lab PDFs into structured markdown, preserving table rows and flags before extraction.
+- **Google Gemini (reasoning model)**: Extracts structured lab metrics and generates patient-facing insights/chat responses.
+- **Nemotron Embeddings (NVIDIA)**: Creates 2048-dim chunk-level vectors for retrieval (`passage` for ingestion, `query` for search).
+- **Nemotron Reranker (NVIDIA)**: Re-ranks pgvector candidates before RAG prompt assembly for higher precision context.
 
 ## 🛠 Core Services
 
@@ -73,3 +75,4 @@ lib/
 │   └── security/        # Security monitoring UI
 └── main.dart            # Entry point and global configuration
 ```
+

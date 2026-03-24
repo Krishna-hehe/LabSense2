@@ -48,7 +48,7 @@
                style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; 
                font-src 'self' https://fonts.gstatic.com; 
                img-src 'self' data: https:; 
-               connect-src 'self' https://*.supabase.co https://generativelanguage.googleapis.com;">
+               connect-src 'self' https://*.supabase.co https://integrate.api.nvidia.com;">
 ```text
 
 ### 2. **Missing Security Headers** - SEVERITY: HIGH
@@ -221,7 +221,7 @@ Future<void> verifyRlsEnabled() async {
 **Current Implementation:**
 
 ```dart
-static String get geminiApiKey => dotenv.env['GEMINI_API_KEY'] ?? '';
+static String get NIMApiKey => dotenv.env['NIM_API_KEY'] ?? '';
 static String get supabaseAnonKey => dotenv.env['SUPABASE_ANON_KEY'] ?? '';
 ```text
 **✅ Good Practices:**
@@ -245,7 +245,7 @@ echo ".env" >> .gitignore
 
 # Use Supabase Edge Functions for sensitive operations
 
-# Move Gemini API calls to backend when possible
+# Move NVIDIA NIM API calls to backend when possible
 
 ```text
 
@@ -376,7 +376,7 @@ if (!_rateLimiter.isAllowed(email)) {
 |---------|---------|------|-------|
 | `flutter_markdown` | `any` | ⚠️ MEDIUM | Unpinned version - use specific version |
 | `mime` | `any` | ⚠️ MEDIUM | Unpinned version |
-| `google_generative_ai` | `^0.4.7` | ℹ️ LOW | Third-party AI SDK - monitor for updates |
+| `NVIDIA NIM API` | `^0.4.7` | ℹ️ LOW | Third-party AI SDK - monitor for updates |
 
 **Recommendations:**
 
@@ -430,7 +430,7 @@ dev_dependencies:
 | Boundary | Protection | Status |
 |----------|------------|--------|
 | Client ↔ Supabase | RLS + Auth | ⚠️ Verify RLS |
-| Client ↔ Gemini API | API Key | ✅ OK |
+| Client ↔ NVIDIA NIM API | API Key | ✅ OK |
 | User Input ↔ Database | Sanitization | ⚠️ Partial |
 | User Input ↔ AI | Sanitization | ✅ Good |
 
@@ -593,3 +593,4 @@ TextField(
 3. Implement fixes in priority order
 4. Re-scan after fixes
 5. Conduct penetration testing before production launch
+
